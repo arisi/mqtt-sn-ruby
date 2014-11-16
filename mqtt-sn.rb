@@ -13,6 +13,9 @@ REGISTER_TYPE=0x0A
 REGACK_TYPE=0x0B
 PUBLISH_TYPE=0x0C
 PUBACK_TYPE =0x0D
+PUBCOMP_TYPE =0x0E
+PUBREC_TYPE =0x0F
+PUBREL_TYPE =0x10
 PINGREQ_TYPE=0x16
 PINGRESP_TYPE=0x17
 
@@ -52,19 +55,18 @@ def send type,hash={},&block
     hash[:id].each_byte do |b|
       p<<b
     end
-    reply_type=:connect_ack
   when :register 
     p=[REGISTER_TYPE,0,0,hash[:msg_id] >>8 ,hash[:msg_id] & 0xff]
     hash[:topic].each_byte do |b|
       p<<b
     end
-    reply_type=:register_ack
   when :publish 
     p=[PUBLISH_TYPE,0x20*(hash[:qos]||0),hash[:topic_id] >>8 ,hash[:topic_id] & 0xff,hash[:msg_id] >>8 ,hash[:msg_id] & 0xff]
     hash[:msg].each_byte do |b|
       p<<b
     end
-    reply_type=:publish_ack
+  when :pubrel 
+    p=[PUBREL_TYPE,hash[:msg_id] >>8 ,hash[:msg_id] & 0xff]
   when :ping
     p=[PINGREQ_TYPE]
     reply_type=:pong
@@ -78,14 +80,14 @@ def send type,hash={},&block
   timeout=hash[:timeout]||10
   status=:timeout
   m={}
-  if block #wait timeout time for reply_type to arrive..
-    puts "waiting for #{reply_type}, timeout: #{timeout}"
+  if hash[:expect] #wait timeout time for reply_type to arrive..
+    puts "waiting for #{hash[:expect]}, timeout: #{timeout}"
     while Time.now.to_i<stime+timeout
       if not $iq.empty?
         m=$iq.pop
         puts "from queue:"
         pp m
-        if m[:type]==reply_type
+        if Array(hash[:expect]).include? m[:type]
           status=:ok
           break
         else
@@ -94,7 +96,9 @@ def send type,hash={},&block
       end
       sleep 0.1
     end
-    block.call  status,m
+    if block
+      block.call  status,m
+    end
   end
   #sleep 0.1
 end
@@ -131,10 +135,16 @@ t=Thread.new do
       when REGACK_TYPE
         topic_id=(r[2].ord<<8)+r[3].ord
         m={type: :register_ack,topic_id: topic_id,status: status}
+      when PUBREC_TYPE
+        msg_id=(r[2].ord<<8)+r[3].ord
+        m={type: :pubrec,msg_id: msg_id,status: :ok}
       when PUBACK_TYPE
         m={type: :publish_ack,status: status}
+      when PUBCOMP_TYPE
+        msg_id=(r[2].ord<<8)+r[3].ord
+        m={type: :pubcomp,status: :ok, msg_id: msg_id}
       when PINGRESP_TYPE
-        m={type: :pong}
+        m={type: :pong, status: :ok}
       else
         m={type: :unknown, type_byte: type_byte }
       end
@@ -147,22 +157,27 @@ t=Thread.new do
   end
 end
 
-send :connect,id: "tadaa" do |s,m|
+send :connect,id: "tadaa", expect: :connect_ack do |s,m|
   puts "got connection! status=#{s}, message=#{m}"
 end
-send :register,topic:"top",msg_id:$msg_id do |s,m|
+send :register,topic:"top",msg_id:$msg_id, expect: :register_ack do |s,m|
   puts "got topic! status=#{s}, message=#{m}"
 end
-#sleep 0.5
+
 $msg_id+=1
-send :publish,msg:"tadaa",topic_id: 1, msg_id:$msg_id, qos: 2 do |s,m|
+send :publish,msg:"tadaa",topic_id: 1, msg_id:$msg_id, qos: 2, expect: [:publish_ack,:pubrec] do |s,m|
   puts "got published! status=#{s}, message=#{m}"
+  if s==:ok
+    if m[:type]==:pubrec
+      send :pubrel,msg_id: m[:msg_id], expect: :pubcomp do |s,m|
+        puts "got handshaken! status=#{s}, message=#{m}"
+      end
+    end
+  end
 end
-#sleep 0.5
-send :ping, timeout: 3 do |status,message|
+
+send :ping, timeout: 3, expect: :pong do |status,message|
   puts "got bong! status=#{status}, message=#{message}"
 end
-
-
 
 t.join
