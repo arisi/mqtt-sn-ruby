@@ -5,13 +5,14 @@ require "pp"
 require 'socket'
 require 'json'
 
-
-
 class MqttSN
+
+  Nretry = 5  # Max retry
+  Tretry = 10 # Timeout before retry 
 
   CONNECT_TYPE   =0x04
   CONNACK_TYPE   =0x05
-  WILLTOPICREQ_TYPE   =0x06
+  WILLTOPICREQ_TYPE=0x06
   WILLTOPIC_TYPE =0x07
   WILLMSGREQ_TYPE=0x08
   WILLMSG_TYPE   =0x09
@@ -22,6 +23,10 @@ class MqttSN
   PUBCOMP_TYPE   =0x0E
   PUBREC_TYPE    =0x0F
   PUBREL_TYPE    =0x10
+  SUBSCRIBE_TYPE =0x12
+  SUBACK_TYPE    =0x13
+  UNSUBSCRIBE_TYPE=0x14
+  UNSUBACK_TYPE  =0x15
   PINGREQ_TYPE   =0x16
   PINGRESP_TYPE  =0x17
   DISCONNECT_TYPE=0x18
@@ -107,6 +112,14 @@ class MqttSN
         p<<b
       end
       @@msg_id+=1
+    when :register_ack
+      p=[REGACK_TYPE,hash[:topic_id]>>8 ,hash[:topic_id] & 0xff,hash[:msg_id]>>8 ,hash[:msg_id] & 0xff,hash[:return_code]]
+    when :publish_ack
+      p=[PUBACK_TYPE,hash[:topic_id]>>8 ,hash[:topic_id] & 0xff,hash[:msg_id]>>8 ,hash[:msg_id] & 0xff,hash[:return_code]]
+    when :pub_rec
+      p=[PUBREC_TYPE,hash[:msg_id]>>8 ,hash[:msg_id] & 0xff]
+    when :pub_comp
+      p=[PUBCOMP_TYPE,hash[:msg_id]>>8 ,hash[:msg_id] & 0xff]
     when :will_topic 
       raise "Need :topic to :will_topic" if not hash[:topic]
       p=[WILLTOPIC_TYPE,0]
@@ -131,6 +144,23 @@ class MqttSN
       hash[:msg].each_byte do |b|
         p<<b
       end
+
+    when :subscribe 
+      raise "Need :topic to :subscribe" if not hash[:topic]
+      qos=hash[:qos]||0
+      flags=0 
+      if qos==-1
+        flags+=QOSM1_FLAG
+      else
+        flags+=QOS1_FLAG*qos 
+      end
+      p=[SUBSCRIBE_TYPE,flags,@@msg_id >>8 ,@@msg_id & 0xff]
+      hash[:topic].each_byte do |b|
+        p<<b
+      end
+      @@msg_id+=1
+
+
     when :publish
       raise "Need :topic_id to Publish!" if not hash[:topic_id]
       qos=hash[:qos]||0
@@ -152,30 +182,54 @@ class MqttSN
     when :ping
       p=[PINGREQ_TYPE]
     when :disconnect
-      p=[DISCONNECT_TYPE]
+      if hash[:duration]
+        p=[DISCONNECT_TYPE,hash[:duration] >>8 ,hash[:duration] & 0xff]
+      else
+        p=[DISCONNECT_TYPE]
+      end
     else
       puts "Error: Strange send?? #{type}"
       return nil
     end
-    @iq.clear
-    stime=Time.now.to_i
+    if hash[:expect] 
+      while not @iq.empty?
+        mp=@iq.pop
+        puts "WARN:#{@id} ************** Purged message: #{mp}"
+      end
+      @iq.clear
+    end
     raw=send_packet p
     hash[:raw]=raw if @debug
     puts "send:#{@id} #{type},#{hash.to_json}"
-    timeout=hash[:timeout]||10
+    timeout=hash[:timeout]||Tretry
     status=:timeout
+    retries=0
     m={}
     if hash[:expect] 
-      while Time.now.to_i<stime+timeout
-        if not @iq.empty?
-          m=@iq.pop
-          if Array(hash[:expect]).include? m[:type]
-            status=:ok
-            break
+      while retries<Nretry do
+        stime=Time.now.to_i
+        while Time.now.to_i<stime+timeout
+          if not @iq.empty?
+            m=@iq.pop
+            if Array(hash[:expect]).include? m[:type]
+              status=:ok
+              break
+            else
+              puts "WARN:#{@id} ************** Discarded message: #{m}"
+            end
           end
+          sleep 0.1
         end
-        sleep 0.1
+        if status==:ok
+          break
+        else
+          retries+=1
+          send_packet p
+          puts "fail to get ack, retry #{retries} :#{@id} #{type},#{hash.to_json}"
+          #need to set DUP flag !
+        end
       end
+
       if block
         block.call  status,m
       end
@@ -215,7 +269,8 @@ class MqttSN
           send :will_topic, topic: @will_topic, expect: [:will_msg_req] do |s,m| #add will here!
             if s==:ok
               puts "will msg!"
-              send :will_msg, msg: @will_msg
+              send :will_msg, msg: @will_msg, expect: [:connect_ack] do |s,m| 
+              end
             end
           end
         end
@@ -228,8 +283,18 @@ class MqttSN
     end
   end
 
+  def goto_sleep duration 
+    send :disconnect, duration: duration, expect: :disconnect do |status,message|
+    end
+  end
+
+  def subscribe topic,hash={}
+    send :subscribe, topic: topic, qos: hash[:qos],expect: :sub_ack do |status,message|
+    end
+  end
+
   def ping
-    send :ping, timeout: 1,expect: :pong do |status,message|
+    send :ping, timeout: 2,expect: :pong do |status,message|
       if status==:ok
       else
         puts "Error:#{@id} no pong!"
@@ -249,29 +314,29 @@ class MqttSN
     @topics[topic]
   end
 
-  def publish topic,msg,qos=0
+  def publish topic,msg,hash={}
     if not @topics[topic]
       register_topic topic
     end
-    case qos
-    when 0
-      send :publish,msg: msg,topic_id: @topics[topic], qos: 0
+    case hash[:qos]
     when 1
-      send :publish,msg: msg, retain: true, topic_id: @topics[topic], qos: 1, expect: [:publish_ack] do |s,m|
+      send :publish,msg: msg, retain: hash[:retain], topic_id: @topics[topic], qos: 1, expect: [:publish_ack] do |s,m|
         if s==:ok
-          puts "got handshaken 1! status=#{s}, message=#{m.to_json}"
+          puts "got handshaken once! status=#{s}, message=#{m.to_json}"
         end
       end
     when 2
-      send :publish,msg: msg, retain: true, topic_id: @topics[topic], qos: 2, expect: [:pubrec] do |s,m|
+      send :publish,msg: msg, retain: hash[:retain], topic_id: @topics[topic], qos: 2, expect: [:pubrec] do |s,m|
         if s==:ok
           if m[:type]==:pubrec
             send :pubrel,msg_id: m[:msg_id], expect: :pubcomp do |s,m|
-              puts "got handshaken 2!  status=#{s}, message=#{m.to_json}"
+              puts "got handshaken twice!  status=#{s}, message=#{m.to_json}"
             end
           end
         end
       end
+    else
+      send :publish,msg: msg, retain: hash[:retain],topic_id: @topics[topic], qos: 0
     end
   end
 
@@ -294,13 +359,46 @@ class MqttSN
           status=:unknown_error
         end
         type_byte=r[1].ord
+        done=false
         case type_byte
         when CONNACK_TYPE
           m={type: :connect_ack,status: status}
           @state=:connected
+
+        when SUBACK_TYPE
+          topic_id=(r[3].ord<<8)+r[4].ord
+          msg_id=(r[5].ord<<8)+r[6].ord
+          m={type: :sub_ack, topic_id: topic_id, msg_id: msg_id, status: status}
+        when PUBLISH_TYPE
+          topic_id=(r[3].ord<<8)+r[4].ord
+          msg_id=(r[5].ord<<8)+r[6].ord
+          msg=r[7,len-7]
+          flags=r[2].ord
+          qos=(flags>>5)&0x03
+          m={type: :publish, qos: qos, topic_id: topic_id, msg_id: msg_id, msg: msg,status: :ok}
+          done=true
+          if qos==1 #send ack
+            send :publish_ack,topic_id: topic_id, msg_id: msg_id, return_code: 0
+          elsif qos==2 #send ack
+            send :pub_rec, msg_id: msg_id
+          end
+        when PUBREL_TYPE
+          msg_id=(r[2].ord<<8)+r[3].ord
+          send :pub_comp, msg_id: msg_id
+          done=true
         when DISCONNECT_TYPE
           m={type: :disconnect,status: :ok}
           @state=:disconnected
+        when REGISTER_TYPE
+          puts "registering... *************************"
+          topic_id=(r[2].ord<<8)+r[3].ord
+          msg_id=(r[4].ord<<8)+r[5].ord
+          topic=r[6,len-6]
+          m={type: :register, topic_id: topic_id, msg_id: msg_id, topic: topic,status: :ok}
+          @topics[topic]=m[:topic_id]
+          pp @topics
+          send :register_ack,topic_id: topic_id, msg_id: msg_id, return_code: 0
+          done=true
         when REGACK_TYPE
           topic_id=(r[2].ord<<8)+r[3].ord
           m={type: :register_ack,topic_id: topic_id,status: status}
@@ -335,13 +433,18 @@ class MqttSN
           m[:raw]=hexdump r
         end
         puts "got :#{@id} #{m.to_json}"
-        @iq<<m if m
+        if m[:type]==:publish
+          puts "**************************** PUBLISH"
+        end
+        if not done
+          @iq<<m if m
+        end
       rescue IO::WaitReadable
         IO.select([@s])
         retry
       rescue => e
-        puts "Error: receive thread died:"
-        pp e
+        puts "Error: receive thread died: #{e}"
+        pp e.backtrace
       end
     end
   end

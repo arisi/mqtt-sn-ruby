@@ -17,33 +17,44 @@ puts "Testing mqtt-sn.."
 
 sn=MqttSN.new debug: true
 sn2=MqttSN.new debug: false
+sn3=MqttSN.new debug: true
+
 
 sn.will_and_testament "top","testamentti"
 sn.connect "eka"
+
 sn2.connect "toka"
+
+sn3.connect "kolmas"
+
+sn3.subscribe "eka/+",qos:2
 
 topic_id=0
 sn.will_and_testament "top2","testamentti2"
 
 sn2.ping
 
-sn.register_topic "jeesus/perkele/toimii"
-sn.publish "top","perkkule0",0
-sn.publish "top","perkkule1",1
-sn.publish "top","perkkule2",2
+#sn.register_topic "jeesus/perkele/toimii"
+sn.publish "eka/1","perkkule0",qos: 0
+sn.publish "eka/2","perkkule1",qos: 1
+sn.publish "eka/3","perkkule2",qos: 2
 
-sn2.publish "top","2perkkule0",0
-sn2.publish "top","2perkkule1",1
-sn2.publish "top","2perkkule2",2
-
+sn2.publish "eka/4","2perkkule0",qos: 0
+sn2.publish "eka/5","2perkkule1rrrr",qos: 1, retain: true
+sn2.publish "eka/6","2perkkule2",qos: 2
 sn2.disconnect
+
+#puts "----------------- sleep"
+#sn2.goto_sleep 4
 
 5.times do
   sn.ping
   sleep 0.5
 end
 
+
 sn.disconnect
+sn3.disconnect
 
 
 puts "Done testing mqtt-sn!"
