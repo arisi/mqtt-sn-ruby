@@ -11,6 +11,10 @@ class MqttSN
 
   CONNECT_TYPE   =0x04
   CONNACK_TYPE   =0x05
+  WILLTOPICREQ_TYPE   =0x06
+  WILLTOPIC_TYPE =0x07
+  WILLMSGREQ_TYPE=0x08
+  WILLMSG_TYPE   =0x09
   REGISTER_TYPE  =0x0A
   REGACK_TYPE    =0x0B
   PUBLISH_TYPE   =0x0C
@@ -37,6 +41,10 @@ class MqttSN
       @port=hash[:port]||1883
       @debug=hash[:debug]
       @state=:inited
+      @will_topic=nil
+      @will_msg=nil
+      @id="?"
+      @topics={} #hash of registered topics is stored here
       @iq = Queue.new
       @s = UDPSocket.new
       @t=Thread.new do
@@ -73,15 +81,21 @@ class MqttSN
 
   def send type,hash={},&block
     puts ""
+    if @state!=:connected and type!=:connect and type!=:will_topic  and type!=:will_msg
+      raise "Error: Cannot #{type} while unconnected, send :connect first!"
+    end
     case type
     when :connect
+      raise "Need :id, it is required at :connect!" if not hash[:id]
       flags=0 
       flags+=CLEAN_FLAG if hash[:clean]
       flags+=RETAIN_FLAG if hash[:retain]
+      flags+=WILL_FLAG if @will_topic
       p=[CONNECT_TYPE,flags,0x01,0,30]
       hash[:id].each_byte do |b|
         p<<b
       end
+      @id=hash[:id]
     when :register 
       raise "Need :topic to Publish!" if not hash[:topic]
       p=[REGISTER_TYPE,0,0,@@msg_id >>8 ,@@msg_id & 0xff]
@@ -89,6 +103,18 @@ class MqttSN
         p<<b
       end
       @@msg_id+=1
+    when :will_topic 
+      raise "Need :topic to :will_topic" if not hash[:topic]
+      p=[WILLTOPIC_TYPE,0]
+      hash[:topic].each_byte do |b|
+        p<<b
+      end
+    when :will_msg 
+      raise "Need :msg to :will_msg" if not hash[:msg]
+      p=[WILLMSG_TYPE]
+      hash[:msg].each_byte do |b|
+        p<<b
+      end
     when :publish
       raise "Need :topic_id to Publish!" if not hash[:topic_id]
       qos=hash[:qos]||0
@@ -119,12 +145,11 @@ class MqttSN
     stime=Time.now.to_i
     raw=send_packet p
     hash[:raw]=raw if @debug
-    puts "send: #{type},#{hash.to_json}"
+    puts "send:#{@id} #{type},#{hash.to_json}"
     timeout=hash[:timeout]||10
     status=:timeout
     m={}
-    if hash[:expect] #wait timeout time for reply_type to arrive..
-      #puts "waiting for #{hash[:expect]}, timeout: #{timeout}"
+    if hash[:expect] 
       while Time.now.to_i<stime+timeout
         if not @iq.empty?
           m=@iq.pop
@@ -137,6 +162,79 @@ class MqttSN
       end
       if block
         block.call  status,m
+      end
+    end
+  end
+
+  def will_and_testament topic,msg
+    @will_topic=topic
+    @will_msg=msg
+  end
+
+  def connect id
+    send :connect,id: id, clean: true, expect: [:connect_ack,:will_topic_req] do |s,m| #add will here!
+      if s==:ok
+        if m[:type]==:will_topic_req
+          puts "will topic!"
+          send :will_topic, topic: @will_topic, expect: [:will_msg_req] do |s,m| #add will here!
+            if s==:ok
+              puts "will msg!"
+              send :will_msg, msg: @will_msg
+            end
+          end
+        end
+      end
+    end
+  end
+
+  def disconnect 
+    send :disconnect, expect: :disconnect do |status,message|
+    end
+  end
+
+  def ping
+    send :ping, timeout: 1,expect: :pong do |status,message|
+      if status==:ok
+      else
+        puts "Error:#{@id} no pong!"
+      end
+    end
+  end
+
+  def register_topic topic
+    send :register,topic: topic, expect: :register_ack do |s,m|
+      if s==:ok
+        @topics[topic]=m[:topic_id]
+      else
+        raise "Error:#{@id} Register topic #{topic} failed!"
+      end
+      pp @topics
+    end
+    @topics[topic]
+  end
+
+  def publish topic,msg,qos=0
+    if not @topics[topic]
+      register_topic topic
+    end
+    case qos
+    when 0
+      send :publish,msg: msg,topic_id: @topics[topic], qos: 0
+    when 1
+      send :publish,msg: msg, retain: true, topic_id: @topics[topic], qos: 1, expect: [:publish_ack] do |s,m|
+        if s==:ok
+          puts "got handshaken 1! status=#{s}, message=#{m.to_json}"
+        end
+      end
+    when 2
+      send :publish,msg: msg, retain: true, topic_id: @topics[topic], qos: 2, expect: [:pubrec] do |s,m|
+        if s==:ok
+          if m[:type]==:pubrec
+            send :pubrel,msg_id: m[:msg_id], expect: :pubcomp do |s,m|
+              puts "got handshaken 2!  status=#{s}, message=#{m.to_json}"
+            end
+          end
+        end
       end
     end
   end
@@ -165,12 +263,12 @@ class MqttSN
           m={type: :connect_ack,status: status}
           @state=:connected
         when DISCONNECT_TYPE
-          m={type: :disconnect,status: status}
+          m={type: :disconnect,status: :ok}
           @state=:disconnected
         when REGACK_TYPE
           topic_id=(r[2].ord<<8)+r[3].ord
           m={type: :register_ack,topic_id: topic_id,status: status}
-          @state=:registered
+          #@state=:registered
         when PUBREC_TYPE
           msg_id=(r[2].ord<<8)+r[3].ord
           m={type: :pubrec,msg_id: msg_id,status: :ok}
@@ -181,6 +279,12 @@ class MqttSN
         when PUBCOMP_TYPE
           msg_id=(r[2].ord<<8)+r[3].ord
           m={type: :pubcomp,status: :ok, msg_id: msg_id}
+
+        when WILLTOPICREQ_TYPE
+          m={type: :will_topic_req, status: :ok}
+        when WILLMSGREQ_TYPE
+          m={type: :will_msg_req, status: :ok}
+
         when PINGRESP_TYPE
           m={type: :pong, status: :ok}
         else
@@ -189,7 +293,7 @@ class MqttSN
         if @debug
           m[:raw]=hexdump r
         end
-        puts "got: #{m.to_json}"
+        puts "got :#{@id} #{m.to_json}"
         @iq<<m if m
       rescue IO::WaitReadable
         IO.select([@s])
