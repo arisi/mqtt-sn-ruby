@@ -3,7 +3,7 @@ mqtt-sn-ruby
 
 Ruby toolkit for MQTT-SN, compatible with RSMB, command line tools and API
 
-```
+```ruby
 send :connect,id: "tadaaxxx", debug: true, expect: :connect_ack do |s,m| #add will here!
   puts "got connection! status=#{s}, message=#{m.to_json}"
 end
