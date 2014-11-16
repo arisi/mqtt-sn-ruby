@@ -25,6 +25,10 @@ class MqttSN
   PINGREQ_TYPE   =0x16
   PINGRESP_TYPE  =0x17
   DISCONNECT_TYPE=0x18
+  WILLTOPICUPD_TYPE=0x1A
+  WILLTOPICRESP_TYPE=0x1B
+  WILLMSGUPD_TYPE =0x1C
+  WILLMSGRESP_TYPE=0x1D
 
   RETAIN_FLAG=0x10
   WILL_FLAG  =0x08
@@ -109,9 +113,21 @@ class MqttSN
       hash[:topic].each_byte do |b|
         p<<b
       end
+    when :will_topic_upd 
+      raise "Need :topic to :will_topic_upd" if not hash[:topic]
+      p=[WILLTOPICUPD_TYPE,0]
+      hash[:topic].each_byte do |b|
+        p<<b
+      end
     when :will_msg 
       raise "Need :msg to :will_msg" if not hash[:msg]
       p=[WILLMSG_TYPE]
+      hash[:msg].each_byte do |b|
+        p<<b
+      end
+    when :will_msg_upd
+      raise "Need :msg to :will_msg_upd" if not hash[:msg]
+      p=[WILLMSGUPD_TYPE]
       hash[:msg].each_byte do |b|
         p<<b
       end
@@ -167,6 +183,26 @@ class MqttSN
   end
 
   def will_and_testament topic,msg
+    if @state==:connected #if already connected, send changes, otherwise wait until connect does it.
+      if @will_topic!=topic
+        send :will_topic_upd, topic: topic, expect: :will_topic_resp do |status,message|
+          puts "will topic updated"
+          if status==:ok
+          else
+            puts "Error:#{@id} no pong!"
+          end
+        end
+      end
+      if @will_msg!=msg
+        send :will_msg_upd, msg: msg, expect: :will_msg_resp do |status,message|
+          puts "will msg updated"
+          if status==:ok
+          else
+            puts "Error:#{@id} no pong!"
+          end
+        end
+      end
+    end
     @will_topic=topic
     @will_msg=msg
   end
@@ -284,6 +320,11 @@ class MqttSN
           m={type: :will_topic_req, status: :ok}
         when WILLMSGREQ_TYPE
           m={type: :will_msg_req, status: :ok}
+
+        when WILLTOPICRESP_TYPE
+          m={type: :will_topic_resp, status: :ok}
+        when WILLMSGRESP_TYPE
+          m={type: :will_msg_resp, status: :ok}
 
         when PINGRESP_TYPE
           m={type: :pong, status: :ok}

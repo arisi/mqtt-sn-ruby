@@ -23,6 +23,7 @@ sn.connect "eka"
 sn2.connect "toka"
 
 topic_id=0
+sn.will_and_testament "top2","testamentti2"
 
 sn2.ping
 
