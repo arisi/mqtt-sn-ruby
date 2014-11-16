@@ -1,0 +1,16 @@
+*.gem
+*.raw
+*.mp3
+*.rbc
+.DS_Store
+*~
+.sass-cache/*
+.sass-cache
+uploads/*
+.bundle
+.config
+log/
+*.jpg
+*.pdf
+x
+
