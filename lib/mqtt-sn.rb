@@ -163,6 +163,7 @@ $t=Thread.new do
   end
 end
 
+def tester
 
   send :connect,id: "tadaa", expect: :connect_ack do |s,m|
     puts "got connection! status=#{s}, message=#{m.to_json}"
@@ -189,3 +190,4 @@ end
     sleep 5
   end
   $t.join
+end

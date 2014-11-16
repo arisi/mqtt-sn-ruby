@@ -30,6 +30,13 @@ QOS0_FLAG  =0x00
 
 $msg_id=1
 $iq = Queue.new
+$debug=false
+
+
+def init server='127.0.0.1',port=1883
+  $server=server
+  $port=port
+end
 
 def send_packet m
   msg=" "
@@ -39,22 +46,23 @@ def send_packet m
     len+=1
   end
   msg[0]=len.chr
-  if false
-    print ">> "
-    msg.each_byte do |ch|
-      printf "%02X ",ch
-    end
-    puts ""
+  $s.send(msg, 0, $server, $port)
+  raw=""
+  msg.each_byte do |b|
+    raw=raw+"," if raw!=""
+    raw=raw+sprintf("%02X",b)
   end
-  $s.send(msg, 0, '20.20.20.21', 1883)
+  raw
 end
 
 def send type,hash={},&block
   puts ""
-  puts "#{type},#{hash.to_json}"
   case type
-  when :connect 
-    p=[CONNECT_TYPE,CLEAN_FLAG,0x01,0,30]
+  when :connect
+    flags=0 
+    flags+=CLEAN_FLAG if hash[:clean]
+    flags+=RETAIN_FLAG if hash[:retain]
+    p=[CONNECT_TYPE,flags,0x01,0,30]
     hash[:id].each_byte do |b|
       p<<b
     end
@@ -67,14 +75,22 @@ def send type,hash={},&block
     $msg_id+=1
   when :publish
     raise "Need :topic_id to Publish!" if not hash[:topic_id]
-    p=[PUBLISH_TYPE,0x20*(hash[:qos]||0),hash[:topic_id] >>8 ,hash[:topic_id] & 0xff,$msg_id >>8 ,$msg_id & 0xff]
+    qos=hash[:qos]||0
+    flags=0 
+    flags+=RETAIN_FLAG if hash[:retain]
+    if qos==-1
+      flags+=QOSM1_FLAG
+    else
+      flags+=QOS1_FLAG*qos 
+    end
+    p=[PUBLISH_TYPE,flags,hash[:topic_id] >>8 ,hash[:topic_id] & 0xff,$msg_id >>8 ,$msg_id & 0xff]
     hash[:msg].each_byte do |b|
       p<<b
     end
     $msg_id+=1
-  when :pubrel 
-    p=[PUBREL_TYPE,$msg_id >>8 ,$msg_id & 0xff]
-    $msg_id+=1
+  when :pubrel #this is in reference to original publish msg_id, need to use it!
+    raise "Need the orifinal :msg_id of the Publish for PubRel!" if not hash[:msg_id]
+    p=[PUBREL_TYPE,hash[:msg_id] >>8 ,hash[:msg_id] & 0xff]
   when :ping
     p=[PINGREQ_TYPE]
     reply_type=:pong
@@ -84,7 +100,9 @@ def send type,hash={},&block
   end
   $iq.clear
   stime=Time.now.to_i
-  send_packet p
+  raw=send_packet p
+  hash[:raw]=raw if $debug
+  puts "send: #{type},#{hash.to_json}"
   timeout=hash[:timeout]||10
   status=:timeout
   m={}
@@ -93,7 +111,6 @@ def send type,hash={},&block
     while Time.now.to_i<stime+timeout
       if not $iq.empty?
         m=$iq.pop
-        #pp m
         if Array(hash[:expect]).include? m[:type]
           status=:ok
           break
@@ -140,7 +157,9 @@ $t=Thread.new do
         msg_id=(r[2].ord<<8)+r[3].ord
         m={type: :pubrec,msg_id: msg_id,status: :ok}
       when PUBACK_TYPE
-        m={type: :publish_ack,status: status}
+        topic_id=(r[2].ord<<8)+r[3].ord
+        msg_id=(r[4].ord<<8)+r[5].ord
+        m={type: :publish_ack,topic_id: topic_id,msg_id: msg_id, status: status}
       when PUBCOMP_TYPE
         msg_id=(r[2].ord<<8)+r[3].ord
         m={type: :pubcomp,status: :ok, msg_id: msg_id}
@@ -148,11 +167,14 @@ $t=Thread.new do
         m={type: :pong, status: :ok}
       else
         m={type: :unknown, type_byte: type_byte }
-        print "<< "
+      end
+      if $debug
+        raw=""
         r.each_byte do |b|
-          printf "%02X ",b
+          raw=raw+"," if raw!=""
+          raw=raw+sprintf("%02X",b)
         end
-        puts ""
+        m[:raw]=raw
       end
       puts "got: #{m.to_json}"
       $iq<<m if m
@@ -162,30 +184,3 @@ $t=Thread.new do
     end
   end
 end
-
-
-  send :connect,id: "tadaa", expect: :connect_ack do |s,m|
-    puts "got connection! status=#{s}, message=#{m.to_json}"
-  end
-  send :register,topic:"top", expect: :register_ack do |s,m|
-    puts "got topic! status=#{s}, message=#{m.to_json}"
-  end
-
-  send :publish,msg:"tadaa",topic_id: 1, qos: 2, expect: [:publish_ack,:pubrec] do |s,m|
-    puts "got published! status=#{s}, message=#{m.to_json}"
-    if s==:ok
-      if m[:type]==:pubrec
-        send :pubrel,msg_id: m[:msg_id], expect: :pubcomp do |s,m|
-          puts "got handshaken! status=#{s}, message=#{m.to_json}"
-        end
-      end
-    end
-  end
-
-  while true do
-    send :ping, timeout: 3, expect: :pong do |status,message|
-      puts "got bong! status=#{status}, message=#{message.to_json}"
-    end
-    sleep 5
-  end
-  $t.join
