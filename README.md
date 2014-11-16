@@ -3,6 +3,12 @@ mqtt-sn-ruby
 
 Ruby toolkit for MQTT-SN, compatible with RSMB, command line tools and API
 
+Still in wery early phases, check the test.rb for current usage.
+
+But soon, it will be full-fledged CLI and API for MQTT-SN, all in Ruby.
+
+You can use it for testing, and for building gateways from packet radio ... or can, or whatever.
+
 ```ruby
 send :connect,id: "tadaaxxx", debug: true, expect: :connect_ack do |s,m| #add will here!
   puts "got connection! status=#{s}, message=#{m.to_json}"
