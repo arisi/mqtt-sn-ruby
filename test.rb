@@ -65,12 +65,7 @@ sn.send :publish,msg:"tadaa2",topic_id: topic_id, qos: 2, debug: true, expect: [
   end
 end
 
-sn.send :disconnect, expect: :disconnect do |status,message|
-  puts "got disconnecter status=#{status}, message=#{message.to_json}"
-end
-
-
-2.times do
+5.times do
   sn.send :ping, timeout: 1,expect: :pong do |status,message|
     if status==:ok
       puts "got bong! status=#{status}, message=#{message.to_json}"
@@ -79,11 +74,12 @@ end
       break
     end
   end
-  sleep 5
+  sleep 3
 end
 
+sn.send :disconnect, expect: :disconnect do |status,message|
+  puts "got disconnecter status=#{status}, message=#{message.to_json}"
+end
 
-sn=nil
-sn2=nil
 puts "Done testing mqtt-sn!"
 
