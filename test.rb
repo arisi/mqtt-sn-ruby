@@ -57,7 +57,7 @@ end
 
 
 3.times do
-  send :ping, timeout: 3, expect: :pong do |status,message|
+  send :ping, expect: :pong do |status,message|
     puts "got bong! status=#{status}, message=#{message.to_json}"
   end
   sleep 5
