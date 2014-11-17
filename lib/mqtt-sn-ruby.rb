@@ -53,6 +53,7 @@ class MqttSN
       @will_topic=nil
       @will_msg=nil
       @id="?"
+      @lock=false
       @topics={} #hash of registered topics is stored here
       @iq = Queue.new
       @dataq = Queue.new
@@ -200,7 +201,11 @@ class MqttSN
       puts "Error: Strange send?? #{type}"
       return nil
     end
-    if hash[:expect] 
+    if hash[:expect]
+      while @lock do
+        sleep 0.1
+      end
+      @lock=true 
       # set mutex on --  no other polling kind of command until this is done!
       while not @iq.empty?
         mp=@iq.pop
@@ -240,6 +245,7 @@ class MqttSN
         end
       end
       # release mutex!
+      @lock=false
       if block
         block.call  status,m
       end
