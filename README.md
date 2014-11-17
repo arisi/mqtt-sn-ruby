@@ -36,9 +36,9 @@ require 'mqtt-sn-ruby'
 sn=MqttSN.new debug: true
 
 sn.connect "mynode2"
- sn3.subscribe "sensors/+/floor",qos:2 do |status,message|
-    puts "Measurement: #{status},#{message.to_json}"
-  end
+sn.subscribe "sensors/+/floor",qos:2 do |status,message|
+  puts "Measurement: #{status},#{message.to_json}"
+end
 sn.disconnect
 
 ```
