@@ -256,7 +256,7 @@ class MqttSN
 
   end
 
-  def self.forwarder listen_ip,listen_port,hash={}
+  def self.forwarder hash={}
     @options=hash #save these
     @server=hash[:server]||"127.0.0.1"
     @port=hash[:port]||1883
@@ -264,8 +264,7 @@ class MqttSN
     @verbose=hash[:verbose]
 
     socket = UDPSocket.new
-    socket.bind(listen_ip,listen_port)
-    puts "listening #{listen_ip}:#{listen_port}"
+    socket.bind(hash[:local_ip]||"127.0.0.1",hash[:local_port]||0)
     clients={}
     begin 
       while true

@@ -70,6 +70,19 @@ Usage: mqtt-sn-sub.rb [options]
     -t, --topic topic      Topic to subscribe (test/message/123)
 ```
 
+- Forwarder, from UDP server:socket to another UDP server:socket.  Displays packets on screen as they are forwarder, great for debugging! Press Control-C to Quit.
+```shell
+$ mqtt-sn-forward.rb 
+
+Usage: mqtt-sn-sub.rb [options]
+    -v, --[no-]verbose     Run verbosely (false)
+    -d, --[no-]debug       Produce Debug dump on console (false)
+    -h, --host host        MQTT-SN target Host to connect (localhost)
+    -p, --port port        MQTT-SN target Port to connect (1883)
+    -i, --localip host     MQTT-SN local IP to bind (127.0.0.1)
+    -l, --localport port   MQTT-SN locat Port to listen (1882)
+```
+
 for more up-to-date examples, see the included test.rb
 
 

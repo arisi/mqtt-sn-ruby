@@ -22,17 +22,23 @@ OptionParser.new do |opts|
   opts.on("-d", "--[no-]debug", "Produce Debug dump on console (false)") do |v|
     options[:debug] = v
   end
-  opts.on("-h", "--host host", "MQTT-SN Host to connect (localhost)") do |v|
+  opts.on("-h", "--host host", "MQTT-SN target Host to connect (localhost)") do |v|
     options[:server] = v
   end
-  opts.on("-p", "--port port", "MQTT-SN Port to connect (1883)") do |v|
+  opts.on("-p", "--port port", "MQTT-SN target Port to connect (1883)") do |v|
     options[:port] = v.to_i
+  end
+  opts.on("-i", "--localip ip", "MQTT-SN Local ip to bind (127.0.0.1)") do |v|
+    options[:local_ip] = v
+  end
+  opts.on("-l", "--localport port", "MQTT-SN local port to listen (1882)") do |v|
+    options[:local_port] = v.to_i
   end
 end.parse!
 
 puts "MQTT-SN-FORWARDER: #{options.to_json}"
 begin
-  MqttSN.forwarder "20.20.20.21",3333,options
+  MqttSN.forwarder options
 rescue SystemExit, Interrupt
   puts "\nExiting after Disconnect\n"
 rescue => e
