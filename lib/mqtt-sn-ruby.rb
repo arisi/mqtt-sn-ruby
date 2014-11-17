@@ -55,6 +55,7 @@ class MqttSN
       @id="?"
       @topics={} #hash of registered topics is stored here
       @iq = Queue.new
+      @dataq = Queue.new
       @s = UDPSocket.new
       @t=Thread.new do
         recv_thread
@@ -88,6 +89,7 @@ class MqttSN
     hexdump msg
   end
 
+  
   def send type,hash={},&block
     puts ""
     if @state!=:connected and type!=:connect and type!=:will_topic  and type!=:will_msg
@@ -160,6 +162,13 @@ class MqttSN
       end
       @@msg_id+=1
 
+    when :unsubscribe 
+      raise "Need :topic to :unsubscribe" if not hash[:topic]
+      p=[UNSUBSCRIBE_TYPE,0,@@msg_id >>8 ,@@msg_id & 0xff]
+      hash[:topic].each_byte do |b|
+        p<<b
+      end
+      @@msg_id+=1
 
     when :publish
       raise "Need :topic_id to Publish!" if not hash[:topic_id]
@@ -192,6 +201,7 @@ class MqttSN
       return nil
     end
     if hash[:expect] 
+      # set mutex on --  no other polling kind of command until this is done!
       while not @iq.empty?
         mp=@iq.pop
         puts "WARN:#{@id} ************** Purged message: #{mp}"
@@ -205,7 +215,7 @@ class MqttSN
     status=:timeout
     retries=0
     m={}
-    if hash[:expect] 
+    if hash[:expect]
       while retries<Nretry do
         stime=Time.now.to_i
         while Time.now.to_i<stime+timeout
@@ -229,7 +239,7 @@ class MqttSN
           #need to set DUP flag !
         end
       end
-
+      # release mutex!
       if block
         block.call  status,m
       end
@@ -288,8 +298,37 @@ class MqttSN
     end
   end
 
-  def subscribe topic,hash={}
-    send :subscribe, topic: topic, qos: hash[:qos],expect: :sub_ack do |status,message|
+  
+  def subscribe topic,hash={},&block
+    send :subscribe, topic: topic, qos: hash[:qos],expect: :sub_ack do |s,m|
+      if s==:ok
+        if m[:topic_id] and m[:topic_id]>0 #when subs topic has no wild cards, we get topic id here:
+          @topics[topic]=m[:topic_id]
+        end
+      end
+      if block
+        block.call :sub_ack,m
+        while true
+          if not @dataq.empty?
+            m=@dataq.pop
+            block.call :got_data,m
+          end
+          sleep 0.1
+          if @state!=:connected
+            block.call :disconnect,{}
+            break
+          end
+          #need to monitor unsunscribes too...
+        end
+      puts "SSSSSSSSSSSSSSSSS ends1"
+
+      end
+    end
+    puts "SSSSSSSSSSSSSSSSS ends"
+  end
+
+  def unsubscribe topic
+    send :unsubscribe, topic: topic, expect: :unsub_ack do |s,m|
     end
   end
 
@@ -322,7 +361,6 @@ class MqttSN
     when 1
       send :publish,msg: msg, retain: hash[:retain], topic_id: @topics[topic], qos: 1, expect: [:publish_ack] do |s,m|
         if s==:ok
-          puts "got handshaken once! status=#{s}, message=#{m.to_json}"
         end
       end
     when 2
@@ -330,7 +368,6 @@ class MqttSN
         if s==:ok
           if m[:type]==:pubrec
             send :pubrel,msg_id: m[:msg_id], expect: :pubcomp do |s,m|
-              puts "got handshaken twice!  status=#{s}, message=#{m.to_json}"
             end
           end
         end
@@ -364,33 +401,37 @@ class MqttSN
         when CONNACK_TYPE
           m={type: :connect_ack,status: status}
           @state=:connected
-
         when SUBACK_TYPE
           topic_id=(r[3].ord<<8)+r[4].ord
           msg_id=(r[5].ord<<8)+r[6].ord
           m={type: :sub_ack, topic_id: topic_id, msg_id: msg_id, status: status}
+        when UNSUBACK_TYPE
+          msg_id=(r[2].ord<<8)+r[3].ord
+          m={type: :unsub_ack, msg_id: msg_id, status: :ok}
         when PUBLISH_TYPE
           topic_id=(r[3].ord<<8)+r[4].ord
           msg_id=(r[5].ord<<8)+r[6].ord
           msg=r[7,len-7]
           flags=r[2].ord
           qos=(flags>>5)&0x03
-          m={type: :publish, qos: qos, topic_id: topic_id, msg_id: msg_id, msg: msg,status: :ok}
-          done=true
-          if qos==1 #send ack
+          topic=@topics.key(topic_id)
+          m={type: :publish, qos: qos, topic_id: topic_id, topic: topic,msg_id: msg_id, msg: msg,status: :ok}
+          @dataq<<m
+          if qos==1 
             send :publish_ack,topic_id: topic_id, msg_id: msg_id, return_code: 0
-          elsif qos==2 #send ack
+          elsif qos==2 
             send :pub_rec, msg_id: msg_id
           end
+          done=true
         when PUBREL_TYPE
           msg_id=(r[2].ord<<8)+r[3].ord
+          m={type: :pub_rel, status: :ok}
           send :pub_comp, msg_id: msg_id
           done=true
         when DISCONNECT_TYPE
           m={type: :disconnect,status: :ok}
           @state=:disconnected
         when REGISTER_TYPE
-          puts "registering... *************************"
           topic_id=(r[2].ord<<8)+r[3].ord
           msg_id=(r[4].ord<<8)+r[5].ord
           topic=r[6,len-6]
@@ -429,13 +470,10 @@ class MqttSN
         else
           m={type: :unknown, type_byte: type_byte }
         end
-        if @debug
+        if @debug and m
           m[:raw]=hexdump r
         end
         puts "got :#{@id} #{m.to_json}"
-        if m[:type]==:publish
-          puts "**************************** PUBLISH"
-        end
         if not done
           @iq<<m if m
         end

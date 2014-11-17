@@ -27,17 +27,24 @@ sn2.connect "toka"
 
 sn3.connect "kolmas"
 
-sn3.subscribe "eka/+",qos:2
+Thread.new do
+  sn3.subscribe "eka/2",qos:2 do |s,m|
+    puts ">>>>>>>>>>>> subscribe got: #{s},#{m}"
+  end
+end
+sleep 1
+sn3.unsubscribe "eka/2" # this can cause race condition ... must wait until pevious subscribe has received ack.. until exec unsubsribe -- a mutex during wait?
 
 topic_id=0
 sn.will_and_testament "top2","testamentti2"
 
 sn2.ping
-
+sn3.subscribe "eka/3",qos:2 
 #sn.register_topic "jeesus/perkele/toimii"
 sn.publish "eka/1","perkkule0",qos: 0
 sn.publish "eka/2","perkkule1",qos: 1
 sn.publish "eka/3","perkkule2",qos: 2
+
 
 sn2.publish "eka/4","2perkkule0",qos: 0
 sn2.publish "eka/5","2perkkule1rrrr",qos: 1, retain: true
