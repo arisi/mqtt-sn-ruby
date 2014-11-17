@@ -1,6 +1,6 @@
 Gem::Specification.new do |s|
   s.name        = 'mqtt-sn-ruby'
-  s.version     = '0.0.5'
+  s.version     = '0.0.6'
   s.date        = '2014-11-17'
   s.summary     = "Ruby toolkit for MQTT-SN"
   s.description = "Ruby toolkit for MQTT-SN, compatible with RSMB, command line tools and API"

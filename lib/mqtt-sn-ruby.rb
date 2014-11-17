@@ -10,6 +10,8 @@ class MqttSN
   Nretry = 5  # Max retry
   Tretry = 10 # Timeout before retry 
 
+  SEARCHGW_TYPE  =0x01
+  GWINFO_TYPE    =0x02
   CONNECT_TYPE   =0x04
   CONNACK_TYPE   =0x05
   WILLTOPICREQ_TYPE=0x06
@@ -66,8 +68,6 @@ class MqttSN
       end
   end
 
-
-
   def hexdump data
     raw=""
     data.each_byte do |b|
@@ -77,7 +77,7 @@ class MqttSN
     raw
   end
 
-  def send_packet m
+  def self.build_packet m
     msg=" "
     len=1
     m.each_with_index do |b,i|
@@ -85,6 +85,11 @@ class MqttSN
       len+=1
     end
     msg[0]=len.chr
+    msg
+  end
+
+  def send_packet m
+    msg=MqttSN::build_packet m
     @s.send(msg, 0, @server, @port)
     hexdump msg
   end
@@ -199,6 +204,8 @@ class MqttSN
       p=[PUBREL_TYPE,hash[:msg_id] >>8 ,hash[:msg_id] & 0xff]
     when :ping
       p=[PINGREQ_TYPE]
+     when :searchgw
+      p=[SEARCHGW_TYPE,0]
     when :disconnect
       if hash[:duration]
         p=[DISCONNECT_TYPE,hash[:duration] >>8 ,hash[:duration] & 0xff]
@@ -268,6 +275,7 @@ class MqttSN
     clients={}
     begin 
       while true
+        #periodically broadcast :advertize
         begin
           r,stuff=socket.recvfrom_nonblock(200)
           puts "got packet:"
@@ -277,8 +285,16 @@ class MqttSN
           if not clients[key]
             clients[key]={ip:client_ip, port:client_port, socket: UDPSocket.new  }
           end
-          clients[key][:socket].send(r, 0, @server, @port)
           m=MqttSN::parse_message r
+          case m[:type]
+          when :searchgw
+            #do it here! and reply with :gwinfo
+            p=[GWINFO_TYPE,0xAB]
+            msg=MqttSN::build_packet p
+            socket.send(msg, 0, client_ip, client_port)
+          else
+            clients[key][:socket].send(r, 0, @server, @port)
+          end
           puts ">#{m.to_json}"
         rescue IO::WaitReadable
         rescue => e
@@ -448,6 +464,10 @@ class MqttSN
     type_byte=r[1].ord
     done=false
     case type_byte
+    when CONNECT_TYPE
+      duration=(r[4].ord<<8)+r[5].ord
+      id=r[6,len-6]
+      m={type: :connect, flags: r[2].ord, duration: duration, client_id: id, status: :ok}
     when CONNACK_TYPE
       m={type: :connect_ack,status: status}
     when SUBACK_TYPE
@@ -498,6 +518,11 @@ class MqttSN
     when WILLMSGRESP_TYPE
       m={type: :will_msg_resp, status: :ok}
 
+    when SEARCHGW_TYPE
+      m={type: :searchgw, status: :ok}
+    when GWINFO_TYPE
+      m={type: :gwinfo, gw_id: r[2].ord, status: :ok}
+
     when PINGRESP_TYPE
       m={type: :pong, status: :ok}
     else
@@ -543,7 +568,6 @@ class MqttSN
     end
     puts "got :#{@id} #{m.to_json}"  if @verbose
     if not done
-      puts "pushed to q"
       @iq<<m if m
     end
     m

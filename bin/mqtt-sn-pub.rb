@@ -46,6 +46,9 @@ puts "MQTT-SN-PUB: #{options.to_json}"
 begin
   sn=MqttSN.new options
   sn.connect options[:id]
+  #sn.send :searchgw, expect: :gwinfo do |status,message|
+  #  puts "got gwinfo: #{status}: #{message}"
+  #end
   sn.publish options[:topic]||"test/message/123", options[:msg]||"test_value", qos: options[:qos]
   puts "Sent ok."
 rescue SystemExit, Interrupt
