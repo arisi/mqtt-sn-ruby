@@ -53,7 +53,7 @@ class MqttSN
       @will_topic=nil
       @will_msg=nil
       @id="?"
-      @lock=false
+      @sem=Mutex.new 
       @topics={} #hash of registered topics is stored here
       @iq = Queue.new
       @dataq = Queue.new
@@ -201,55 +201,51 @@ class MqttSN
       puts "Error: Strange send?? #{type}"
       return nil
     end
-    if hash[:expect]
-      while @lock do
-        sleep 0.1
-      end
-      @lock=true 
-      # set mutex on --  no other polling kind of command until this is done!
-      while not @iq.empty?
-        mp=@iq.pop
-        puts "WARN:#{@id} ************** Purged message: #{mp}"
-      end
-      @iq.clear
-    end
-    raw=send_packet p
-    hash[:raw]=raw if @debug
-    puts "send:#{@id} #{type},#{hash.to_json}"
-    timeout=hash[:timeout]||Tretry
     status=:timeout
-    retries=0
     m={}
-    if hash[:expect]
-      while retries<Nretry do
-        stime=Time.now.to_i
-        while Time.now.to_i<stime+timeout
-          if not @iq.empty?
-            m=@iq.pop
-            if Array(hash[:expect]).include? m[:type]
-              status=:ok
-              break
-            else
-              puts "WARN:#{@id} ************** Discarded message: #{m}"
+    @sem.synchronize do #one command at a time -- 
+      if hash[:expect]
+        while not @iq.empty?
+          mp=@iq.pop
+          puts "WARN:#{@id} ************** Purged message: #{mp}"
+        end
+        @iq.clear
+      end
+      raw=send_packet p
+      hash[:raw]=raw if @debug
+      puts "send:#{@id} #{type},#{hash.to_json}"
+      timeout=hash[:timeout]||Tretry
+     retries=0
+      if hash[:expect]
+        while retries<Nretry do
+          stime=Time.now.to_i
+          while Time.now.to_i<stime+timeout
+            if not @iq.empty?
+              m=@iq.pop
+              if Array(hash[:expect]).include? m[:type]
+                status=:ok
+                break
+              else
+                puts "WARN:#{@id} ************** Discarded message: #{m}"
+              end
             end
+            sleep 0.1
           end
-          sleep 0.1
-        end
-        if status==:ok
-          break
-        else
-          retries+=1
-          send_packet p
-          puts "fail to get ack, retry #{retries} :#{@id} #{type},#{hash.to_json}"
-          #need to set DUP flag !
+          if status==:ok
+            break
+          else
+            retries+=1
+            send_packet p
+            puts "fail to get ack, retry #{retries} :#{@id} #{type},#{hash.to_json}"
+            #need to set DUP flag !
+          end
         end
       end
-      # release mutex!
-      @lock=false
-      if block
-        block.call  status,m
-      end
+    end #sem
+    if block
+      block.call  status,m
     end
+
   end
 
   def will_and_testament topic,msg
@@ -324,13 +320,9 @@ class MqttSN
             block.call :disconnect,{}
             break
           end
-          #need to monitor unsunscribes too...
         end
-      puts "SSSSSSSSSSSSSSSSS ends1"
-
       end
     end
-    puts "SSSSSSSSSSSSSSSSS ends"
   end
 
   def unsubscribe topic

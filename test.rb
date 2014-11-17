@@ -32,8 +32,7 @@ Thread.new do
     puts ">>>>>>>>>>>> subscribe got: #{s},#{m}"
   end
 end
-sleep 1
-sn3.unsubscribe "eka/2" # this can cause race condition ... must wait until pevious subscribe has received ack.. until exec unsubsribe -- a mutex during wait?
+sn3.unsubscribe "eka/2"
 
 topic_id=0
 sn.will_and_testament "top2","testamentti2"
