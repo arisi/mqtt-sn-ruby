@@ -279,8 +279,8 @@ class MqttSN
             clients[key]={ip:client_ip, port:client_port, socket: UDPSocket.new  }
           end
           clients[key][:socket].send(r, 0, @server, @port)
-          #process_message r
-
+          m=MqttSN::parse_message r
+          puts ">#{m.to_json}"
         rescue IO::WaitReadable
         rescue => e
           puts "Error: receive thread died: #{e}"
@@ -292,7 +292,8 @@ class MqttSN
             puts "got packet from server to client #{key}:"
             puts "sending to #{c[:ip]}:#{c[:port]}"
             socket.send(r, 0, c[:ip], c[:port])
-            #process_message r
+            m=MqttSN::parse_message r
+            puts "<#{m.to_json}"
           rescue IO::WaitReadable
           rescue => e
             puts "Error: receive thread died: #{e}"
@@ -355,7 +356,6 @@ class MqttSN
     send :disconnect, duration: duration, expect: :disconnect do |status,message|
     end
   end
-
   
   def subscribe topic,hash={},&block
     send :subscribe, topic: topic, qos: hash[:qos],expect: :sub_ack do |s,m|
@@ -431,7 +431,7 @@ class MqttSN
     end
   end
 
-  def process_message r
+  def self.parse_message r
     m=nil
     len=r[0].ord
     case r[len-1].ord
@@ -451,7 +451,6 @@ class MqttSN
     case type_byte
     when CONNACK_TYPE
       m={type: :connect_ack,status: status}
-      @state=:connected
     when SUBACK_TYPE
       topic_id=(r[3].ord<<8)+r[4].ord
       msg_id=(r[5].ord<<8)+r[6].ord
@@ -465,37 +464,17 @@ class MqttSN
       msg=r[7,len-7]
       flags=r[2].ord
       qos=(flags>>5)&0x03
-      topic=@topics.key(topic_id)
-      m={type: :publish, qos: qos, topic_id: topic_id, topic: topic,msg_id: msg_id, msg: msg,status: :ok}
-      @dataq<<m
-      if not @transfer
-        if qos==1 
-          send :publish_ack,topic_id: topic_id, msg_id: msg_id, return_code: 0
-        elsif qos==2 
-          send :pub_rec, msg_id: msg_id
-        end
-        done=true
-      end
+      m={type: :publish, qos: qos, topic_id: topic_id,msg_id: msg_id, msg: msg,status: :ok}
     when PUBREL_TYPE
       msg_id=(r[2].ord<<8)+r[3].ord
-      m={type: :pub_rel, status: :ok}
-      if not @transfer
-        send :pub_comp, msg_id: msg_id
-        done=true
-      end
+      m={type: :pub_rel, msg_id: msg_id, status: :ok}
     when DISCONNECT_TYPE
       m={type: :disconnect,status: :ok}
-      @state=:disconnected if not @transfer
     when REGISTER_TYPE
       topic_id=(r[2].ord<<8)+r[3].ord
       msg_id=(r[4].ord<<8)+r[5].ord
       topic=r[6,len-6]
       m={type: :register, topic_id: topic_id, msg_id: msg_id, topic: topic,status: :ok}
-      @topics[topic]=m[:topic_id]
-      if not @transfer
-        send :register_ack,topic_id: topic_id, msg_id: msg_id, return_code: 0
-        done=true
-      end
     when REGACK_TYPE
       topic_id=(r[2].ord<<8)+r[3].ord
       m={type: :register_ack,topic_id: topic_id,status: status}
@@ -525,11 +504,43 @@ class MqttSN
     else
       m={type: :unknown, type_byte: type_byte }
     end
+    m
+  end
+
+  def process_message r
+    m=MqttSN::parse_message r
     if @debug and m
       m[:debug]=hexdump r
     end
-    if @transfer
-      m[:raw]=r
+    done=false
+    case m[:type]
+    when :register
+      @topics[m[:topic]]=m[:topic_id]
+      if not @transfer
+        send :register_ack,topic_id: m[:topic_id], msg_id: m[:msg_id], return_code: 0
+        done=true
+      end
+    when :disconnect
+      @state=:disconnected if not @transfer
+    when :pub_rel
+      if not @transfer
+        send :pub_comp, msg_id: m[:msg_id]
+        done=true
+      end
+    when :publish
+      m[:topic]=@topics.key(m[:topic_id])
+
+      if not @transfer
+        @dataq<<m
+        if m[:qos]==1 
+          send :publish_ack,topic_id: m[:topic_id], msg_id: m[:msg_id], return_code: 0
+        elsif m[:qos]==2 
+          send :pub_rec, msg_id: m[:msg_id]
+        end
+        done=true
+      end
+    when :connect_ack
+      @state=:connected
     end
     puts "got :#{@id} #{m.to_json}"  if @verbose
     if not done
