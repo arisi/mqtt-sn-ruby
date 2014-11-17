@@ -61,13 +61,9 @@ class MqttSN
       @t=Thread.new do
         recv_thread
       end
-      puts "opened ok"
-      pp @s
   end
 
-  def close
-    proc { puts "DESTROY OBJECT #{bar}" }
-  end
+
 
   def hexdump data
     raw=""

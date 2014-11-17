@@ -49,6 +49,7 @@ sn2.publish "eka/4","2perkkule0",qos: 0
 sn2.publish "eka/5","2perkkule1rrrr",qos: 1, retain: true
 sn2.publish "eka/6","2perkkule2",qos: 2
 sn2.disconnect
+sn2=nil
 
 #puts "----------------- sleep"
 #sn2.goto_sleep 4
