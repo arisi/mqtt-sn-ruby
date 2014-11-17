@@ -49,6 +49,7 @@ class MqttSN
       @server=hash[:server]||"127.0.0.1"
       @port=hash[:port]||1883
       @debug=hash[:debug]
+      @verbose=hash[:verbose]
       @state=:inited
       @will_topic=nil
       @will_msg=nil
@@ -86,15 +87,20 @@ class MqttSN
     hexdump msg
   end
 
-  
   def send type,hash={},&block
-    puts ""
+    puts ""  if @verbose
     if @state!=:connected and type!=:connect and type!=:will_topic  and type!=:will_msg
-      raise "Error: Cannot #{type} while unconnected, send :connect first!"
+      if type==:disconnect
+        return #already disconnected.. nothing to do
+      else
+        raise "Error: Cannot #{type} while unconnected, send :connect first!"
+      end
     end
     case type
     when :connect
-      raise "Need :id, it is required at :connect!" if not hash[:id]
+      if not hash[:id]
+        hash[:id]="xxx"
+      end
       flags=0 
       flags+=CLEAN_FLAG if hash[:clean]
       flags+=RETAIN_FLAG if hash[:retain]
@@ -209,7 +215,7 @@ class MqttSN
       end
       raw=send_packet p
       hash[:raw]=raw if @debug
-      puts "send:#{@id} #{type},#{hash.to_json}"
+      puts "send:#{@id} #{type},#{hash.to_json}" if @verbose
       timeout=hash[:timeout]||Tretry
      retries=0
       if hash[:expect]
@@ -342,7 +348,7 @@ class MqttSN
       else
         raise "Error:#{@id} Register topic #{topic} failed!"
       end
-      pp @topics
+      #pp @topics
     end
     @topics[topic]
   end
@@ -431,7 +437,7 @@ class MqttSN
           topic=r[6,len-6]
           m={type: :register, topic_id: topic_id, msg_id: msg_id, topic: topic,status: :ok}
           @topics[topic]=m[:topic_id]
-          pp @topics
+          #pp @topics
           send :register_ack,topic_id: topic_id, msg_id: msg_id, return_code: 0
           done=true
         when REGACK_TYPE
@@ -467,7 +473,7 @@ class MqttSN
         if @debug and m
           m[:raw]=hexdump r
         end
-        puts "got :#{@id} #{m.to_json}"
+        puts "got :#{@id} #{m.to_json}"  if @verbose
         if not done
           @iq<<m if m
         end
