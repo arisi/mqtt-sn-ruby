@@ -41,7 +41,7 @@ sn.disconnect
 gem also provides some command line utilities:
 
 
-- Publish utility, use this to subscribe messages. Press Control-C to Quit.
+- Publish utility, use this to subscribe messages.
 ```shell
 $ mqtt-sn-pub.rb 
 

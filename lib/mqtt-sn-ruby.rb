@@ -46,11 +46,13 @@ class MqttSN
   @@msg_id=1
 
   def initialize(hash={})
+      @options=hash #save these
       @server=hash[:server]||"127.0.0.1"
       @port=hash[:port]||1883
       @debug=hash[:debug]
       @verbose=hash[:verbose]
       @state=:inited
+      @forward=hash[:forward] #flag to indicate forward mode 
       @will_topic=nil
       @will_msg=nil
       @id="?"
@@ -85,6 +87,10 @@ class MqttSN
     msg[0]=len.chr
     @s.send(msg, 0, @server, @port)
     hexdump msg
+  end
+
+  def raw_send_packet msg
+    @s.send(msg, 0, @server, @port)
   end
 
   def send type,hash={},&block
@@ -214,7 +220,7 @@ class MqttSN
         @iq.clear
       end
       raw=send_packet p
-      hash[:raw]=raw if @debug
+      hash[:debug]=raw if @debug
       puts "send:#{@id} #{type},#{hash.to_json}" if @verbose
       timeout=hash[:timeout]||Tretry
      retries=0
@@ -248,6 +254,54 @@ class MqttSN
       block.call  status,m
     end
 
+  end
+
+  def self.forwarder listen_ip,listen_port,hash={}
+    @options=hash #save these
+    @server=hash[:server]||"127.0.0.1"
+    @port=hash[:port]||1883
+    @debug=hash[:debug]
+    @verbose=hash[:verbose]
+
+    socket = UDPSocket.new
+    socket.bind(listen_ip,listen_port)
+    puts "listening #{listen_ip}:#{listen_port}"
+    clients={}
+    begin 
+      while true
+        begin
+          r,stuff=socket.recvfrom_nonblock(200)
+          puts "got packet:"
+          client_ip=stuff[2]
+          client_port=stuff[1]
+          key="#{client_ip}:#{client_port}"
+          if not clients[key]
+            clients[key]={ip:client_ip, port:client_port, socket: UDPSocket.new  }
+          end
+          clients[key][:socket].send(r, 0, @server, @port)
+          #process_message r
+
+        rescue IO::WaitReadable
+        rescue => e
+          puts "Error: receive thread died: #{e}"
+          pp e.backtrace
+        end
+        clients.each do |key,c|
+          begin
+            r,stuff=c[:socket].recvfrom_nonblock(200)
+            puts "got packet from server to client #{key}:"
+            puts "sending to #{c[:ip]}:#{c[:port]}"
+            socket.send(r, 0, c[:ip], c[:port])
+            #process_message r
+          rescue IO::WaitReadable
+          rescue => e
+            puts "Error: receive thread died: #{e}"
+            pp e.backtrace
+          end
+        end
+        sleep 0.01
+      end
+    end
   end
 
   def will_and_testament topic,msg
@@ -377,106 +431,119 @@ class MqttSN
     end
   end
 
+  def process_message r
+    m=nil
+    len=r[0].ord
+    case r[len-1].ord
+    when 0x00
+      status=:ok
+    when 0x01
+      status=:rejected_congestion
+    when 0x02
+      status=:rejected_invalid_topic_id
+    when 0x03
+      status=:rejected_not_supported
+    else
+      status=:unknown_error
+    end
+    type_byte=r[1].ord
+    done=false
+    case type_byte
+    when CONNACK_TYPE
+      m={type: :connect_ack,status: status}
+      @state=:connected
+    when SUBACK_TYPE
+      topic_id=(r[3].ord<<8)+r[4].ord
+      msg_id=(r[5].ord<<8)+r[6].ord
+      m={type: :sub_ack, topic_id: topic_id, msg_id: msg_id, status: status}
+    when UNSUBACK_TYPE
+      msg_id=(r[2].ord<<8)+r[3].ord
+      m={type: :unsub_ack, msg_id: msg_id, status: :ok}
+    when PUBLISH_TYPE
+      topic_id=(r[3].ord<<8)+r[4].ord
+      msg_id=(r[5].ord<<8)+r[6].ord
+      msg=r[7,len-7]
+      flags=r[2].ord
+      qos=(flags>>5)&0x03
+      topic=@topics.key(topic_id)
+      m={type: :publish, qos: qos, topic_id: topic_id, topic: topic,msg_id: msg_id, msg: msg,status: :ok}
+      @dataq<<m
+      if not @transfer
+        if qos==1 
+          send :publish_ack,topic_id: topic_id, msg_id: msg_id, return_code: 0
+        elsif qos==2 
+          send :pub_rec, msg_id: msg_id
+        end
+        done=true
+      end
+    when PUBREL_TYPE
+      msg_id=(r[2].ord<<8)+r[3].ord
+      m={type: :pub_rel, status: :ok}
+      if not @transfer
+        send :pub_comp, msg_id: msg_id
+        done=true
+      end
+    when DISCONNECT_TYPE
+      m={type: :disconnect,status: :ok}
+      @state=:disconnected if not @transfer
+    when REGISTER_TYPE
+      topic_id=(r[2].ord<<8)+r[3].ord
+      msg_id=(r[4].ord<<8)+r[5].ord
+      topic=r[6,len-6]
+      m={type: :register, topic_id: topic_id, msg_id: msg_id, topic: topic,status: :ok}
+      @topics[topic]=m[:topic_id]
+      if not @transfer
+        send :register_ack,topic_id: topic_id, msg_id: msg_id, return_code: 0
+        done=true
+      end
+    when REGACK_TYPE
+      topic_id=(r[2].ord<<8)+r[3].ord
+      m={type: :register_ack,topic_id: topic_id,status: status}
+    when PUBREC_TYPE
+      msg_id=(r[2].ord<<8)+r[3].ord
+      m={type: :pubrec,msg_id: msg_id,status: :ok}
+    when PUBACK_TYPE
+      topic_id=(r[2].ord<<8)+r[3].ord
+      msg_id=(r[4].ord<<8)+r[5].ord
+      m={type: :publish_ack,topic_id: topic_id,msg_id: msg_id, status: status}
+    when PUBCOMP_TYPE
+      msg_id=(r[2].ord<<8)+r[3].ord
+      m={type: :pubcomp,status: :ok, msg_id: msg_id}
+
+    when WILLTOPICREQ_TYPE
+      m={type: :will_topic_req, status: :ok}
+    when WILLMSGREQ_TYPE
+      m={type: :will_msg_req, status: :ok}
+
+    when WILLTOPICRESP_TYPE
+      m={type: :will_topic_resp, status: :ok}
+    when WILLMSGRESP_TYPE
+      m={type: :will_msg_resp, status: :ok}
+
+    when PINGRESP_TYPE
+      m={type: :pong, status: :ok}
+    else
+      m={type: :unknown, type_byte: type_byte }
+    end
+    if @debug and m
+      m[:debug]=hexdump r
+    end
+    if @transfer
+      m[:raw]=r
+    end
+    puts "got :#{@id} #{m.to_json}"  if @verbose
+    if not done
+      puts "pushed to q"
+      @iq<<m if m
+    end
+    m
+  end
+
   def recv_thread
     while true do
       begin 
         r,stuff=@s.recvfrom(200) #_nonblock(200)
-        m=nil
-        len=r[0].ord
-        case r[len-1].ord
-        when 0x00
-          status=:ok
-        when 0x01
-          status=:rejected_congestion
-        when 0x02
-          status=:rejected_invalid_topic_id
-        when 0x03
-          status=:rejected_not_supported
-        else
-          status=:unknown_error
-        end
-        type_byte=r[1].ord
-        done=false
-        case type_byte
-        when CONNACK_TYPE
-          m={type: :connect_ack,status: status}
-          @state=:connected
-        when SUBACK_TYPE
-          topic_id=(r[3].ord<<8)+r[4].ord
-          msg_id=(r[5].ord<<8)+r[6].ord
-          m={type: :sub_ack, topic_id: topic_id, msg_id: msg_id, status: status}
-        when UNSUBACK_TYPE
-          msg_id=(r[2].ord<<8)+r[3].ord
-          m={type: :unsub_ack, msg_id: msg_id, status: :ok}
-        when PUBLISH_TYPE
-          topic_id=(r[3].ord<<8)+r[4].ord
-          msg_id=(r[5].ord<<8)+r[6].ord
-          msg=r[7,len-7]
-          flags=r[2].ord
-          qos=(flags>>5)&0x03
-          topic=@topics.key(topic_id)
-          m={type: :publish, qos: qos, topic_id: topic_id, topic: topic,msg_id: msg_id, msg: msg,status: :ok}
-          @dataq<<m
-          if qos==1 
-            send :publish_ack,topic_id: topic_id, msg_id: msg_id, return_code: 0
-          elsif qos==2 
-            send :pub_rec, msg_id: msg_id
-          end
-          done=true
-        when PUBREL_TYPE
-          msg_id=(r[2].ord<<8)+r[3].ord
-          m={type: :pub_rel, status: :ok}
-          send :pub_comp, msg_id: msg_id
-          done=true
-        when DISCONNECT_TYPE
-          m={type: :disconnect,status: :ok}
-          @state=:disconnected
-        when REGISTER_TYPE
-          topic_id=(r[2].ord<<8)+r[3].ord
-          msg_id=(r[4].ord<<8)+r[5].ord
-          topic=r[6,len-6]
-          m={type: :register, topic_id: topic_id, msg_id: msg_id, topic: topic,status: :ok}
-          @topics[topic]=m[:topic_id]
-          #pp @topics
-          send :register_ack,topic_id: topic_id, msg_id: msg_id, return_code: 0
-          done=true
-        when REGACK_TYPE
-          topic_id=(r[2].ord<<8)+r[3].ord
-          m={type: :register_ack,topic_id: topic_id,status: status}
-          #@state=:registered
-        when PUBREC_TYPE
-          msg_id=(r[2].ord<<8)+r[3].ord
-          m={type: :pubrec,msg_id: msg_id,status: :ok}
-        when PUBACK_TYPE
-          topic_id=(r[2].ord<<8)+r[3].ord
-          msg_id=(r[4].ord<<8)+r[5].ord
-          m={type: :publish_ack,topic_id: topic_id,msg_id: msg_id, status: status}
-        when PUBCOMP_TYPE
-          msg_id=(r[2].ord<<8)+r[3].ord
-          m={type: :pubcomp,status: :ok, msg_id: msg_id}
-
-        when WILLTOPICREQ_TYPE
-          m={type: :will_topic_req, status: :ok}
-        when WILLMSGREQ_TYPE
-          m={type: :will_msg_req, status: :ok}
-
-        when WILLTOPICRESP_TYPE
-          m={type: :will_topic_resp, status: :ok}
-        when WILLMSGRESP_TYPE
-          m={type: :will_msg_resp, status: :ok}
-
-        when PINGRESP_TYPE
-          m={type: :pong, status: :ok}
-        else
-          m={type: :unknown, type_byte: type_byte }
-        end
-        if @debug and m
-          m[:raw]=hexdump r
-        end
-        puts "got :#{@id} #{m.to_json}"  if @verbose
-        if not done
-          @iq<<m if m
-        end
+        process_message r
       rescue IO::WaitReadable
         IO.select([@s])
         retry
