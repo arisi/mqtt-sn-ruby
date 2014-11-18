@@ -4,6 +4,7 @@
 require "pp"
 require 'socket'
 require 'json'
+require 'uri'
 
 class MqttSN
 
@@ -12,6 +13,7 @@ class MqttSN
 
   SEARCHGW_TYPE  =0x01
   GWINFO_TYPE    =0x02
+  ADVERTISE_TYPE =0x03
   CONNECT_TYPE   =0x04
   CONNACK_TYPE   =0x05
   WILLTOPICREQ_TYPE=0x06
@@ -47,10 +49,28 @@ class MqttSN
 
   @@msg_id=1
 
+  def open_port uri_s
+    begin
+      uri = URI.parse(uri_s)
+      pp uri
+      if uri.scheme== 'udp'
+        @server=uri.host
+        @port=uri.port
+        puts "server: #{@server}:#{@port}"
+        return UDPSocket.new
+      else
+        raise "Error: Cannot open socket for '#{uri_s}', unsupported scheme: '#{uri.scheme}'"
+      end
+    rescue => e
+        pp e.backtrace
+        raise "Error: Cannot open socket for '#{uri_s}': #{e}"
+    end
+  end
+
   def initialize(hash={})
+      #BasicSocket.do_not_reverse_lookup = true
       @options=hash #save these
-      @server=hash[:server]||"127.0.0.1"
-      @port=hash[:port]||1883
+      @server_uri=hash[:server_uri]||"udp://localhost:1883"
       @debug=hash[:debug]
       @verbose=hash[:verbose]
       @state=:inited
@@ -62,10 +82,24 @@ class MqttSN
       @topics={} #hash of registered topics is stored here
       @iq = Queue.new
       @dataq = Queue.new
-      @s = UDPSocket.new
+      @s = open_port @server_uri
+      pp @s
       @t=Thread.new do
         recv_thread
       end
+      @bcast=nil
+      if true
+        begin
+          @bcast = UDPSocket.open
+          @bcast.bind('0.0.0.0', 1882)
+          @roam_t=Thread.new do
+            roam_thread
+           end
+         rescue => e
+          puts "Error: Could not open bcast port!"
+          @bcast=nil
+        end
+      end     
   end
 
   def self.hexdump data
@@ -87,8 +121,6 @@ class MqttSN
     msg[0]=len.chr
     msg
   end
-
-
 
   def send type,hash={},&block
     #puts ""  if @verbose
@@ -267,7 +299,6 @@ class MqttSN
      _,port,_,_ = socket.addr
     src=":#{port}"
     printf "< %-18.18s <- %-18.18s | %s\n",dest,src,parse_message(msg).to_json
-
   end
 
 
@@ -297,20 +328,34 @@ class MqttSN
     @debug=hash[:debug]
     @verbose=hash[:verbose]
 
+    socket_b = UDPSocket.new
+    socket_b.setsockopt(Socket::SOL_SOCKET, Socket::SO_BROADCAST, true)
+    #socket_b.bind("0.0.0.0",1882)
+
     socket = UDPSocket.new
     socket.bind(hash[:local_ip]||"127.0.0.1",hash[:local_port]||0)
+    
     clients={}
     begin 
+      last=0
+      stime=Time.now.to_i
       while true
+        now=Time.now.to_i
+        if now>last+10
+          MqttSN::send_packet [ADVERTISE_TYPE,0xAB,0,30],socket_b,"255.255.255.255",1882
+          last=now
+        end
+        #periodically kill disconnected clients -- and those timed out..
         #periodically broadcast :advertize
         if pac=poll_packet(socket)
           r,client_ip,client_port=pac
           key="#{client_ip}:#{client_port}"
           if not clients[key]
-            clients[key]={ip:client_ip, port:client_port, socket: UDPSocket.new  }
+            clients[key]={ip:client_ip, port:client_port, socket: UDPSocket.new, state: :active  }
             dest="#{client_ip}:#{client_port}"
             printf "+ %s\n",dest
           end
+          clients[key][:stamp]=Time.now.to_i
           m=MqttSN::parse_message r
           done=false
           case m[:type]
@@ -341,6 +386,7 @@ class MqttSN
             case m[:type]
             when :disconnect
               puts "disco -- kill me!"
+              clients[key][:state]=:disconnected
             end
           end
         end
@@ -492,6 +538,7 @@ class MqttSN
     end
     type_byte=r[1].ord
     done=false
+
     case type_byte
     when CONNECT_TYPE
       duration=(r[4].ord<<8)+r[5].ord
@@ -555,9 +602,13 @@ class MqttSN
       m={type: :searchgw, radius: r[2].ord, status: :ok}
     when GWINFO_TYPE
       m={type: :gwinfo, gw_id: r[2].ord, status: :ok}
+    when ADVERTISE_TYPE
+      duration=(r[3].ord<<8)+r[4].ord
+      m={type: :advertise, gw_id: r[2].ord, duration: duration, status: :ok}
 
     when PINGRESP_TYPE
       m={type: :pong, status: :ok}
+
     else
       m={type: :unknown, type_byte: type_byte }
     end
@@ -594,6 +645,12 @@ class MqttSN
       end
     when :connect_ack
       @state=:connected
+    when :advertise
+      puts "hey, we have router there!"
+      done=true
+    when :gwinfo
+      puts "hey, we have router there!"
+      #done=true
     end
    # puts "got :#{@id} #{m.to_json}"  if @verbose
     if not done
@@ -605,6 +662,20 @@ class MqttSN
   def recv_thread
     while true do
       begin
+        if @bcast 
+          if pac=MqttSN::poll_packet(@bcast)
+            r,client_ip,client_port=pac 
+            m=MqttSN::parse_message r
+            if @debug and m
+              m[:debug]=MqttSN::hexdump r
+            end
+            dest="#{client_ip}:#{client_port}"
+            _,port,_,_ = @bcast.addr
+            src=port
+            printf "R %-18.18s <- %-18.18s | %s\n",dest,":#{port}",m.to_json
+            process_message m
+          end
+        end
         if pac=MqttSN::poll_packet(@s)
           r,client_ip,client_port=pac 
           m=MqttSN::parse_message r
@@ -616,12 +687,17 @@ class MqttSN
           src=port
           printf "> %-18.18s <- %-18.18s | %s\n",dest,":#{port}",m.to_json
           process_message m
-
         end
       rescue => e
         puts "Error: receive thread died: #{e}"
         pp e.backtrace
       end
+    end
+  end
+
+  def roam_thread
+    while true do
+      sleep 1
     end
   end
 end

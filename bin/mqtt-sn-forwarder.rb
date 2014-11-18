@@ -22,11 +22,9 @@ OptionParser.new do |opts|
   opts.on("-d", "--[no-]debug", "Produce Debug dump on console (false)") do |v|
     options[:debug] = v
   end
-  opts.on("-h", "--host host", "MQTT-SN target Host to connect (localhost)") do |v|
-    options[:server] = v
-  end
-  opts.on("-p", "--port port", "MQTT-SN target Port to connect (1883)") do |v|
-    options[:port] = v.to_i
+  options[:server_uri] = "udp://localhost:1883"
+  opts.on("-s", "--server uri", "URI of the MQTT-SN Server to connect to (udp://localhost:1883)") do |v|
+    options[:server_uri] = v
   end
   opts.on("-i", "--localip ip", "MQTT-SN Local ip to bind (127.0.0.1)") do |v|
     options[:local_ip] = v
