@@ -68,7 +68,7 @@ class MqttSN
       end
   end
 
-  def hexdump data
+  def self.hexdump data
     raw=""
     data.each_byte do |b|
       raw=raw+"," if raw!=""
@@ -88,18 +88,10 @@ class MqttSN
     msg
   end
 
-  def send_packet m
-    msg=MqttSN::build_packet m
-    @s.send(msg, 0, @server, @port)
-    hexdump msg
-  end
 
-  def raw_send_packet msg
-    @s.send(msg, 0, @server, @port)
-  end
 
   def send type,hash={},&block
-    puts ""  if @verbose
+    #puts ""  if @verbose
     if @state!=:connected and type!=:connect and type!=:will_topic  and type!=:will_msg
       if type==:disconnect
         return #already disconnected.. nothing to do
@@ -228,7 +220,7 @@ class MqttSN
       end
       raw=send_packet p
       hash[:debug]=raw if @debug
-      puts "send:#{@id} #{type},#{hash.to_json}" if @verbose
+      #puts "send:#{@id} #{type},#{hash.to_json}" if @verbose
       timeout=hash[:timeout]||Tretry
      retries=0
       if hash[:expect]
@@ -263,6 +255,41 @@ class MqttSN
 
   end
 
+  def self.send_raw_packet msg,socket,server,port
+    socket.send(msg, 0, server, port)
+    MqttSN::hexdump msg
+  end
+
+  def self.send_packet m,socket,server,port
+    msg=MqttSN::build_packet m
+    MqttSN::send_raw_packet msg,socket,server,port
+    dest="#{server}:#{port}"
+     _,port,_,_ = socket.addr
+    src=":#{port}"
+    printf "< %-18.18s <- %-18.18s | %s\n",dest,src,parse_message(msg).to_json
+
+  end
+
+
+  def send_packet m
+    MqttSN::send_packet m,@s,@server,@port
+  end
+
+  def self.poll_packet socket
+    #decide how to get data -- UDP-socket or FM-radio
+    begin
+      r,stuff=socket.recvfrom_nonblock(200) #get_packet --high level func!
+      client_ip=stuff[2]
+      client_port=stuff[1]
+      return [r,client_ip,client_port]
+    rescue IO::WaitReadable
+    rescue => e
+      puts "Error: receive thread died: #{e}"
+      pp e.backtrace
+    end
+    return nil
+  end
+
   def self.forwarder hash={}
     @options=hash #save these
     @server=hash[:server]||"127.0.0.1"
@@ -276,43 +303,45 @@ class MqttSN
     begin 
       while true
         #periodically broadcast :advertize
-        begin
-          r,stuff=socket.recvfrom_nonblock(200)
-          puts "got packet:"
-          client_ip=stuff[2]
-          client_port=stuff[1]
+        if pac=poll_packet(socket)
+          r,client_ip,client_port=pac
           key="#{client_ip}:#{client_port}"
           if not clients[key]
             clients[key]={ip:client_ip, port:client_port, socket: UDPSocket.new  }
+            dest="#{client_ip}:#{client_port}"
+            printf "+ %s\n",dest
           end
           m=MqttSN::parse_message r
+          done=false
           case m[:type]
           when :searchgw
             #do it here! and reply with :gwinfo
-            p=[GWINFO_TYPE,0xAB]
-            msg=MqttSN::build_packet p
-            socket.send(msg, 0, client_ip, client_port)
-          else
-            clients[key][:socket].send(r, 0, @server, @port)
+            dest="#{client_ip}:#{client_port}"
+            printf "C %-18.18s -> %-18.18s | %s\n",key,dest,m.to_json
+            MqttSN::send_packet [GWINFO_TYPE,0xAB],socket,client_ip,client_port
+            done=true
           end
-          puts ">#{m.to_json}"
-        rescue IO::WaitReadable
-        rescue => e
-          puts "Error: receive thread died: #{e}"
-          pp e.backtrace
+          if not done # not done locally -> forward it
+            sbytes=clients[key][:socket].send(r, 0, @server, @port) # to rsmb -- ok as is
+            _,port,_,_ = clients[key][:socket].addr
+            dest="#{@server}:#{port}"
+            printf "C %-18.18s -> %-18.18s | %s\n",key,dest,m.to_json
+          end
         end
         clients.each do |key,c|
-          begin
-            r,stuff=c[:socket].recvfrom_nonblock(200)
-            puts "got packet from server to client #{key}:"
-            puts "sending to #{c[:ip]}:#{c[:port]}"
-            socket.send(r, 0, c[:ip], c[:port])
+          if pac=poll_packet(c[:socket])
+            r,client_ip,client_port=pac
+            #puts "got packet #{pac} from server to client #{key}:"
+            #puts "sending to #{c[:ip]}:#{c[:port]}"
+            socket.send(r, 0, c[:ip], c[:port]) # send_packet
             m=MqttSN::parse_message r
-            puts "<#{m.to_json}"
-          rescue IO::WaitReadable
-          rescue => e
-            puts "Error: receive thread died: #{e}"
-            pp e.backtrace
+            _,port,_,_ = clients[key][:socket].addr
+            dest="#{@server}:#{port}"
+            printf "S %-18.18s <- %-18.18s | %s\n",key,dest,m.to_json
+            case m[:type]
+            when :disconnect
+              puts "disco -- kill me!"
+            end
           end
         end
         sleep 0.01
@@ -474,6 +503,10 @@ class MqttSN
       topic_id=(r[3].ord<<8)+r[4].ord
       msg_id=(r[5].ord<<8)+r[6].ord
       m={type: :sub_ack, topic_id: topic_id, msg_id: msg_id, status: status}
+    when SUBSCRIBE_TYPE
+      msg_id=(r[5].ord<<8)+r[6].ord
+      topic=r[5,len-5]
+      m={type: :subscribe, flags: r[2].ord, topic: topic, msg_id: msg_id, status: :ok}
     when UNSUBACK_TYPE
       msg_id=(r[2].ord<<8)+r[3].ord
       m={type: :unsub_ack, msg_id: msg_id, status: :ok}
@@ -519,7 +552,7 @@ class MqttSN
       m={type: :will_msg_resp, status: :ok}
 
     when SEARCHGW_TYPE
-      m={type: :searchgw, status: :ok}
+      m={type: :searchgw, radius: r[2].ord, status: :ok}
     when GWINFO_TYPE
       m={type: :gwinfo, gw_id: r[2].ord, status: :ok}
 
@@ -531,11 +564,7 @@ class MqttSN
     m
   end
 
-  def process_message r
-    m=MqttSN::parse_message r
-    if @debug and m
-      m[:debug]=hexdump r
-    end
+  def process_message m    
     done=false
     case m[:type]
     when :register
@@ -566,7 +595,7 @@ class MqttSN
     when :connect_ack
       @state=:connected
     end
-    puts "got :#{@id} #{m.to_json}"  if @verbose
+   # puts "got :#{@id} #{m.to_json}"  if @verbose
     if not done
       @iq<<m if m
     end
@@ -575,12 +604,20 @@ class MqttSN
 
   def recv_thread
     while true do
-      begin 
-        r,stuff=@s.recvfrom(200) #_nonblock(200)
-        process_message r
-      rescue IO::WaitReadable
-        IO.select([@s])
-        retry
+      begin
+        if pac=MqttSN::poll_packet(@s)
+          r,client_ip,client_port=pac 
+          m=MqttSN::parse_message r
+          if @debug and m
+            m[:debug]=MqttSN::hexdump r
+          end
+          dest="#{client_ip}:#{client_port}"
+          _,port,_,_ = @s.addr
+          src=port
+          printf "> %-18.18s <- %-18.18s | %s\n",dest,":#{port}",m.to_json
+          process_message m
+
+        end
       rescue => e
         puts "Error: receive thread died: #{e}"
         pp e.backtrace

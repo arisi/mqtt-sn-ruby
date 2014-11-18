@@ -43,6 +43,7 @@ rescue SystemExit, Interrupt
   puts "\nExiting after Disconnect\n"
 rescue => e
   puts "\nError: '#{e}' -- Quit after Disconnect\n"
+  pp e.backtrace
 end
 
 puts "MQTT-SN-FORWARDER Done."
