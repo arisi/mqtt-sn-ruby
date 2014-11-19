@@ -2,6 +2,7 @@
 *.raw
 *.mp3
 *.rbc
+*.log
 .DS_Store
 *~
 .sass-cache/*
