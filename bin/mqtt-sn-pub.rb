@@ -44,11 +44,10 @@ puts "MQTT-SN-PUB: #{options.to_json}"
 begin
   sn=MqttSN.new options
   sn.connect options[:id]
-  sn.send :searchgw, expect: :gwinfo do |status,message|
-    puts "got gwinfo: #{status}: #{message}"
-  end
+  sn.send :searchgw #replies may or may not come -- even multiple!
   sn.publish options[:topic]||"test/message/123", options[:msg]||"test_value", qos: options[:qos]
   puts "Sent ok."
+  sleep 2 #allow log tu purge ;)
 rescue SystemExit, Interrupt
   puts "\nExiting after Disconnect\n"
 rescue => e

@@ -35,7 +35,32 @@ OptionParser.new do |opts|
   opts.on("-t", "--topic topic", "Topic to subscribe (test/message/123)") do |topic|
     options[:topic] = topic
   end
+  opts.on("-h", "--http port", "Http port for debug/status JSON server (false)") do |v|
+    options[:http_port] = v.to_i
+  end
+
 end.parse!
+
+
+if options[:http_port]
+  puts "Starting HTTP services at port #{options[:http_port]}"
+  $hp=options[:http_port]
+  Thread.new do
+    server = TCPServer.new("20.20.20.21",8083)
+    loop do
+      Thread.start(server.accept) do |client|
+        response= MqttSN::get_gateways.to_json
+        client.print "HTTP/1.1 200 OK\r\n" +
+               "Content-Type: text/json\r\n" +
+               "Content-Length: #{response.bytesize}\r\n" +
+               "Connection: close\r\n"
+        client.print "\r\n"
+        client.print response 
+        client.close
+      end
+    end
+  end
+end
 
 puts "MQTT-SN-SUB: #{options.to_json}"
 begin

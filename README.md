@@ -1,7 +1,7 @@
 mqtt-sn-ruby
 ============
 
-Ruby toolkit for MQTT-SN, compatible with RSMB, command line tools and API
+A simple Ruby gem for MQTT-SN, compatible with RSMB, minimal depenencies (=no gems), with command line tools and API
 
 Still in very early phases, check the test.rb for current usage.
 
@@ -48,8 +48,7 @@ $ mqtt-sn-pub.rb
 Usage: mqtt-sn-sub.rb [options]
     -v, --[no-]verbose     Run verbosely (false)
     -d, --[no-]debug       Produce Debug dump on console (false)
-    -h, --host host        MQTT-SN Host to connect (localhost)
-    -p, --port port        MQTT-SN Port to connect (1883)
+    -s, --server uri       URI of the MQTT-SN Server to connect to (udp://localhost:1883)
     -q, --qos level        QoS level (0)
     -i, --id id            This client id -- free choice (hostname-pid)
     -m, --msg msg          Message to send (test_value)
@@ -63,8 +62,7 @@ $ mqtt-sn-sub.rb
 Usage: mqtt-sn-sub.rb [options]
     -v, --[no-]verbose     Run verbosely (false)
     -d, --[no-]debug       Produce Debug dump on console (false)
-    -h, --host host        MQTT-SN Host to connect (localhost)
-    -p, --port port        MQTT-SN Port to connect (1883)
+    -s, --server uri       URI of the MQTT-SN Server to connect to (udp://localhost:1883)
     -q, --qos level        QoS level (0)
     -i, --id id            This client id -- free choice (hostname-pid)
     -t, --topic topic      Topic to subscribe (test/message/123)
@@ -77,10 +75,28 @@ $ mqtt-sn-forward.rb
 Usage: mqtt-sn-sub.rb [options]
     -v, --[no-]verbose     Run verbosely (false)
     -d, --[no-]debug       Produce Debug dump on console (false)
-    -h, --host host        MQTT-SN target Host to connect (localhost)
-    -p, --port port        MQTT-SN target Port to connect (1883)
-    -i, --localip host     MQTT-SN local IP to bind (127.0.0.1)
-    -l, --localport port   MQTT-SN locat Port to listen (1882)
+    -s, --server uri       URI of the MQTT-SN Server to connect to (udp://localhost:1883)
+    -l, --localport port   MQTT-SN local port to listen (1882)
+    -h, --http port        Http port for debug/status JSON server (false)
+```
+
+Sample log from forwarder:
+
+```
+C 20.20.20.21:43721  -> 20.20.20.21:38284  | {"type":"register","topic_id":0,"msg_id":1,"topic":"test/uusi","status":"ok"}
+S 20.20.20.21:43721  <- 20.20.20.21:38284  | {"type":"register_ack","topic_id":1,"status":"ok"}
+C 20.20.20.21:43721  -> 20.20.20.21:38284  | {"type":"publish","qos":2,"topic_id":1,"msg_id":2,"msg":"hello!!","status":"ok"}
+S 20.20.20.21:43721  <- 20.20.20.21:38284  | {"type":"pubrec","msg_id":2,"status":"ok"}
+C 20.20.20.21:43721  -> 20.20.20.21:38284  | {"type":"pub_rel","msg_id":2,"status":"ok"}
+S 20.20.20.21:59089  <- 20.20.20.21:46649  | {"type":"register","topic_id":1,"msg_id":1,"topic":"test/uusi","status":"ok"}
+S 20.20.20.21:43721  <- 20.20.20.21:38284  | {"type":"pubcomp","status":"ok","msg_id":2}
+C 20.20.20.21:59089  -> 20.20.20.21:46649  | {"type":"register_ack","topic_id":1,"status":"ok"}
+S 20.20.20.21:59089  <- 20.20.20.21:46649  | {"type":"publish","qos":2,"topic_id":1,"msg_id":2,"msg":"hello!!","status":"ok"}
+C 20.20.20.21:59089  -> 20.20.20.21:46649  | {"type":"pubrec","msg_id":2,"status":"ok"}
+S 20.20.20.21:59089  <- 20.20.20.21:46649  | {"type":"pub_rel","msg_id":2,"status":"ok"}
+C 20.20.20.21:59089  -> 20.20.20.21:46649  | {"type":"pubcomp","status":"ok","msg_id":2}
+C 20.20.20.21:43721  -> 20.20.20.21:38284  | {"type":"disconnect","status":"ok"}
+S 20.20.20.21:43721  <- 20.20.20.21:38284  | {"type":"disconnect","status":"ok"}
 ```
 
 for more up-to-date examples, see the included test.rb
