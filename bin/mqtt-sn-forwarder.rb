@@ -31,6 +31,10 @@ OptionParser.new do |opts|
   opts.on("-l", "--localport port", "MQTT-SN local port to listen (1882)") do |v|
     options[:local_port] = v.to_i
   end 
+  options[:gw_id] = 123
+  opts.on("-i", "--id GwId", "MQTT-SN if of this GateWay (123)") do |v|
+    options[:gw_id] = v.to_i
+  end 
   opts.on("-h", "--http port", "Http port for debug/status JSON server (false)") do |v|
     options[:http_port] = v.to_i
   end

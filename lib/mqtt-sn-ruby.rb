@@ -2,7 +2,6 @@
 # encode: UTF-8
 
 require "pp"
-require 'logger'
 require 'socket'
 require 'json'
 require 'uri'
@@ -52,24 +51,21 @@ class MqttSN
   QOS1_FLAG  =0x20
   QOS0_FLAG  =0x00
 
-  @@msg_id=1
-  @@clients={}
-  @@gateways={}
-  @@log_q = Queue.new #log queue :) 
-  @@log_t=Thread.new do
-    log_thread
+
+  def logger str,*args
+    if @verbose or @debug
+      @log_q << sprintf(str,*args)
+    end
   end
 
-  def self.logger str,*args
-    @@log_q << sprintf(str,*args)
+  def note str,*args
+    @log_q << sprintf(str,*args)
   end
   
   def self.open_port uri_s
     begin
       uri = URI.parse(uri_s)
-      pp uri
-      if uri.scheme== 'udp'
-        puts "server: #{@server}:#{@port}"
+     if uri.scheme== 'udp'
         return [UDPSocket.new,uri.host,uri.port]
       else
         raise "Error: Cannot open socket for '#{uri_s}', unsupported scheme: '#{uri.scheme}'"
@@ -103,10 +99,23 @@ class MqttSN
       @verbose=hash[:verbose]
       @state=:inited
       @bcast_port=5000
+      @bcast_period=10
       @forward=hash[:forward] #flag to indicate forward mode 
       @will_topic=nil
       @will_msg=nil
       @id="?"
+
+
+      @msg_id=1
+      @clients={}
+      @gateways={}
+      @log_q = Queue.new #log queue :) 
+
+      @log_t=Thread.new do
+        log_thread
+      end
+
+
       @sem=Mutex.new 
       @topics={} #hash of registered topics is stored here
       @iq = Queue.new
@@ -127,96 +136,69 @@ class MqttSN
         @s.bind("0.0.0.0",hash[:local_port]||1883)
         @bcast_period=60
         loop do      
-          forwarder
+          forwarder_thread @s
         end
       end
  
   end
 
 
-  def forwarder 
+  def forwarder_thread socket
     begin 
-      last_bcast=0
       last_kill=0
       stime=Time.now.to_i
-      while true
-        now=Time.now.to_i
-        if now>last_bcast+@bcast_period
-           #periodically broadcast :advertize
-          MqttSN::send_packet [ADVERTISE_TYPE,0xAB,0,30],@bcast_s,MULTICAST_ADDR,@bcast_port
-          last_bcast=now
-        end
-        #periodically kill disconnected clients -- and those timed out..
-        if now>last_kill+1
+      Thread.new do #maintenance
+        while true do 
+          sleep 1
           changes=false
-          @@clients.dup.each do |key,data|
+          @clients.dup.each do |key,data|
             if data[:state]==:disconnected
               dest="#{data[:ip]}:#{data[:port]}"
-              MqttSN::logger "- %s",dest
-              @@clients.delete key
+              note "- %s",dest
+              @clients.delete key
               changes=true
             end
           end
           if changes
-             MqttSN::logger "cli:#{@@clients.to_json}"
-          end
-          last_kill=now
-        end
-       
-        if false # pac=MqttSN::poll_packet(@bcast)
-          r,client_ip,client_port=pac
-          key="#{client_ip}:#{client_port}"
-          dest="#{MULTICAST_ADDR};#{@bcast_port}"
-          m=MqttSN::parse_message r
-          MqttSN::logger "R %-18.18s -> %-18.18s | %s",key,dest,m.to_json
-
-          case m[:type]
-          when :searchgw
-            dest="#{client_ip}:#{client_port}"
-            MqttSN::logger "C %-18.18s -> %-18.18s | %s",key,dest,m.to_json
-            MqttSN::send_packet [GWINFO_TYPE,0xAB],@bcast_s,MULTICAST_ADDR,@bcast_port
-            done=true
-          end
-
-        end
-        if pac=MqttSN::poll_packet(@s)
-          r,client_ip,client_port=pac
-          key="#{client_ip}:#{client_port}"
-          if not @@clients[key]
-            @@clients[key]={ip:client_ip, port:client_port, socket: UDPSocket.new, state: :active  }
-            dest="#{client_ip}:#{client_port}"
-            MqttSN::logger "+ %s\n",dest
-            MqttSN::logger "cli: #{@@clients.to_json}"
-          end
-          @@clients[key][:stamp]=Time.now.to_i
-          m=MqttSN::parse_message r
-          done=false
-          
-          if not done # not done locally -> forward it
-            sbytes=@@clients[key][:socket].send(r, 0, @server, @port) # to rsmb -- ok as is
-            _,port,_,_ = @@clients[key][:socket].addr
-            dest="#{@server}:#{port}"
-            MqttSN::logger "C %-18.18s -> %-18.18s | %s",key,dest,m.to_json
+             note "cli:#{@clients.to_json}"
           end
         end
-        @@clients.each do |key,c|
-          if pac=MqttSN::poll_packet(c[:socket])
-            r,client_ip,client_port=pac
-            #puts "got packet #{pac} from server to client #{key}:"
-            #puts "sending to #{c[:ip]}:#{c[:port]}"
-            @s.send(r, 0, c[:ip], c[:port]) # send_packet
-            m=MqttSN::parse_message r
-            _,port,_,_ = @@clients[key][:socket].addr
-            dest="#{@server}:#{port}"
-            MqttSN::logger "S %-18.18s <- %-18.18s | %s",key,dest,m.to_json
-            case m[:type]
-            when :disconnect
-              @@clients[key][:state]=:disconnected
+      end
+      while true
+        pac=MqttSN::poll_packet_block(socket) #data from clients to our service sovket
+        r,client_ip,client_port=pac
+        key="#{client_ip}:#{client_port}"
+        if not @clients[key]
+          @clients[key]={ip:client_ip, port:client_port, socket: UDPSocket.new, state: :active  }
+          c=@clients[key]
+          puts "thread start for #{key}"
+          @clients[key][:thread]=Thread.new(key) do |my_key|
+            while true
+              pacc=MqttSN::poll_packet_block(@clients[my_key][:socket]) #if we get data from server destined to our client
+              rr,client_ip,client_port=pacc
+              @s.send(rr, 0, @clients[my_key][:ip], @clients[my_key][:port]) # send_packet to client
+              mm=MqttSN::parse_message rr
+              _,port,_,_ = @clients[my_key][:socket].addr
+              dest="#{@server}:#{port}"
+              logger "S %-18.18s <- %-18.18s | %s",my_key,dest,mm.to_json
+              case mm[:type]
+              when :disconnect
+                @clients[my_key][:state]=:disconnected
+              end
             end
           end
+          dest="#{client_ip}:#{client_port}"
+          note "+ %s\n",dest
+          note "cli: #{@clients.to_json}"
         end
-        sleep 0.01
-      end
+        @clients[key][:stamp]=Time.now.to_i
+        m=MqttSN::parse_message r
+        sbytes=@clients[key][:socket].send(r, 0, @server, @port) # to rsmb -- ok as is
+        _,port,_,_ = @clients[key][:socket].addr
+        dest="#{@server}:#{port}"
+        logger "C %-18.18s -> %-18.18s | %s",key,dest,m.to_json
+      
+       end
     end
   end
 
@@ -266,11 +248,11 @@ class MqttSN
       @id=hash[:id]
     when :register 
       raise "Need :topic to Publish!" if not hash[:topic]
-      p=[REGISTER_TYPE,0,0,@@msg_id >>8 ,@@msg_id & 0xff]
+      p=[REGISTER_TYPE,0,0,@msg_id >>8 ,@msg_id & 0xff]
       hash[:topic].each_byte do |b|
         p<<b
       end
-      @@msg_id+=1
+      @msg_id+=1
     when :register_ack
       p=[REGACK_TYPE,hash[:topic_id]>>8 ,hash[:topic_id] & 0xff,hash[:msg_id]>>8 ,hash[:msg_id] & 0xff,hash[:return_code]]
     when :publish_ack
@@ -313,19 +295,19 @@ class MqttSN
       else
         flags+=QOS1_FLAG*qos 
       end
-      p=[SUBSCRIBE_TYPE,flags,@@msg_id >>8 ,@@msg_id & 0xff]
+      p=[SUBSCRIBE_TYPE,flags,@msg_id >>8 ,@msg_id & 0xff]
       hash[:topic].each_byte do |b|
         p<<b
       end
-      @@msg_id+=1
+      @msg_id+=1
 
     when :unsubscribe 
       raise "Need :topic to :unsubscribe" if not hash[:topic]
-      p=[UNSUBSCRIBE_TYPE,0,@@msg_id >>8 ,@@msg_id & 0xff]
+      p=[UNSUBSCRIBE_TYPE,0,@msg_id >>8 ,@msg_id & 0xff]
       hash[:topic].each_byte do |b|
         p<<b
       end
-      @@msg_id+=1
+      @msg_id+=1
 
     when :publish
       raise "Need :topic_id to Publish!" if not hash[:topic_id]
@@ -337,11 +319,11 @@ class MqttSN
       else
         flags+=QOS1_FLAG*qos 
       end
-      p=[PUBLISH_TYPE,flags,hash[:topic_id] >>8 ,hash[:topic_id] & 0xff,@@msg_id >>8 ,@@msg_id & 0xff]
+      p=[PUBLISH_TYPE,flags,hash[:topic_id] >>8 ,hash[:topic_id] & 0xff,@msg_id >>8 ,@msg_id & 0xff]
       hash[:msg].each_byte do |b|
         p<<b
       end
-      @@msg_id+=1
+      @msg_id+=1
     when :pubrel 
       raise "Need the original :msg_id of the Publish for PubRel!" if not hash[:msg_id]
       p=[PUBREL_TYPE,hash[:msg_id] >>8 ,hash[:msg_id] & 0xff]
@@ -361,6 +343,15 @@ class MqttSN
     end
     status=:timeout
     m={}
+    if not hash[:expect]
+      if type==:searchgw
+        raw=send_packet p,@bcast,MULTICAST_ADDR,@bcast_port
+      else
+        raw=send_packet p,@s,@server,@port
+      end
+      hash[:debug]=raw if @debug
+      return
+    end
     @sem.synchronize do #one command at a time -- 
       if hash[:expect]
         while not @iq.empty?
@@ -370,9 +361,9 @@ class MqttSN
         @iq.clear
       end
       if type==:searchgw
-        raw=MqttSN::send_packet p,@bcast,MULTICAST_ADDR,@bcast_port
+        raw=send_packet p,@bcast,MULTICAST_ADDR,@bcast_port
       else
-        raw=MqttSN::send_packet p,@s,@server,@port
+        raw=send_packet p,@s,@server,@port
       end
       hash[:debug]=raw if @debug
       #puts "send:#{@id} #{type},#{hash.to_json}" if @verbose
@@ -397,7 +388,7 @@ class MqttSN
             break
           else
             retries+=1
-            send_packet p
+            send_packet p,@s,@server,@port
             puts "fail to get ack, retry #{retries} :#{@id} #{type},#{hash.to_json}"
             #need to set DUP flag !
           end
@@ -419,18 +410,13 @@ class MqttSN
     end
   end
 
-  def self.send_packet m,socket,server,port
+  def send_packet m,socket,server,port
     msg=MqttSN::build_packet m
     MqttSN::send_raw_packet msg,socket,server,port
     dest="#{server}:#{port}"
      _,port,_,_ = socket.addr
     src=":#{port}"
-    MqttSN::logger "< %-18.18s <- %-18.18s | %s",dest,src,parse_message(msg).to_json
-  end
-
-
-  def send_packet m
-    MqttSN::send_packet m,@s,@server,@port
+    logger "< %-18.18s <- %-18.18s | %s",dest,src,MqttSN::parse_message(msg).to_json
   end
 
   def self.poll_packet socket
@@ -441,6 +427,7 @@ class MqttSN
       client_port=stuff[1]
       return [r,client_ip,client_port]
     rescue IO::WaitReadable
+      sleep 0.1
     rescue => e
       puts "Error: receive thread died: #{e}"
       pp e.backtrace
@@ -448,12 +435,20 @@ class MqttSN
     return nil
   end
 
+  def self.poll_packet_block socket
+    #decide how to get data -- UDP-socket or FM-radio
+    r,stuff=socket.recvfrom(200) #get_packet --high level func!
+    client_ip=stuff[2]
+    client_port=stuff[1]
+    return [r,client_ip,client_port]
+  end
+
   def self.get_clients
-    @@clients
+    @clients
   end
 
   def self.get_gateways
-    @@gateways
+    @gateways
   end
 
   
@@ -724,7 +719,7 @@ class MqttSN
   def client_thread socket
     while true do
       begin
-        if pac=MqttSN::poll_packet(socket)
+        if pac=MqttSN::poll_packet_block(socket)
           r,client_ip,client_port=pac 
           m=MqttSN::parse_message r
           if @debug and m
@@ -733,8 +728,10 @@ class MqttSN
           dest="#{client_ip}:#{client_port}"
           _,port,_,_ = @s.addr
           src=port
-          MqttSN::logger "> %-18.18s <- %-18.18s | %s",dest,":#{port}",m.to_json
+          logger "> %-18.18s -> %-18.18s | %s",dest,":#{port}",m.to_json
           process_message m
+        else
+          sleep 0.01
         end
       rescue => e
         puts "Error: receive thread died: #{e}"
@@ -746,41 +743,51 @@ class MqttSN
   def process_broadcast_message m,client_ip,client_port
     case m[:type]
     when :searchgw
-      MqttSN::logger "hey, someone is looking for gateway..."
+      note "hey, someone is looking for gateway..."
       key="#{client_ip}:#{client_port}"
       dest="#{MULTICAST_ADDR};#{@bcast_port}"
       #actually -- send data on all gateways we know...
-      MqttSN::logger "r %-18.18s -> %-18.18s | %s",key,dest,m.to_json
-      MqttSN::send_packet [GWINFO_TYPE,0xAB],@bcast_s,MULTICAST_ADDR,@bcast_port
-    when :advertise,:gwinfo
-      MqttSN::logger "hey, we have gateway there!"
-      if not @@gateways[client_ip]
-         @@gateways[client_ip]={stamp: Time.now.to_i}
-      else
-         @@gateways[client_ip][:stamp]=Time.now.to_i
+      if @options[:forwarder]
+        logger "r %-18.18s -> %-18.18s | %s",key,dest,m.to_json
+        send_packet [GWINFO_TYPE,@options[:gw_id]],@bcast_s,MULTICAST_ADDR,@bcast_port
       end
-      @@gateways[client_ip][:gw_id]=m[:gw_id]
-      @@gateways[client_ip][:duration]=m[:duration]
-      MqttSN::logger "gw: #{@@gateways.to_json}"
+    when :advertise,:gwinfo
+      note "hey, we have gateway there!"
+      if not @gateways[client_ip]
+         @gateways[client_ip]={stamp: Time.now.to_i}
+      else
+         @gateways[client_ip][:stamp]=Time.now.to_i
+      end
+      @gateways[client_ip][:gw_id]=m[:gw_id]
+      @gateways[client_ip][:duration]=m[:duration]
+      note "gw: #{@gateways.to_json}"
     end
   end
 
   def roam_thread socket
+    @last_bcast=0
+    if @options[:forwarder]
+      Thread.new do
+        while true do
+          send_packet [ADVERTISE_TYPE,@options[:gw_id],@bcast_period>>8,@bcast_period&0xff],@bcast_s,MULTICAST_ADDR,@bcast_port
+          sleep @bcast_period
+        end
+      end
+    end
     while true do
       begin
         if @bcast 
-          if pac=MqttSN::poll_packet(socket)
-            r,client_ip,client_port=pac 
-            m=MqttSN::parse_message r
-            if @debug and m
-              m[:debug]=MqttSN::hexdump r
-            end
-            dest="#{client_ip}:#{client_port}"
-            _,port,_,_ = @bcast.addr
-            src=port
-            MqttSN::logger "R %-18.18s <- %-18.18s | %s",dest,":#{port}",m.to_json
-            process_broadcast_message m,client_ip,client_port
+         pac=MqttSN::poll_packet_block(socket)
+          r,client_ip,client_port=pac 
+          m=MqttSN::parse_message r
+          if @debug and m
+            m[:debug]=MqttSN::hexdump r
           end
+          dest="#{client_ip}:#{client_port}"
+          _,port,_,_ = @bcast.addr
+          src=port
+          logger "R %-18.18s <- %-18.18s | %s",dest,":#{port}",m.to_json
+          process_broadcast_message m,client_ip,client_port
         end
       rescue => e
         puts "Error: receive thread died: #{e}"
@@ -789,12 +796,18 @@ class MqttSN
     end
   end
 
-  def self.log_thread 
+  def log_empty?
+    @log_q.empty? or not @verbose
+  end
+
+  def log_thread 
     while true do
       begin
-        if not @@log_q.empty?
-          l=@@log_q.pop
+        if not @log_q.empty?
+          l=@log_q.pop
           puts l
+        else
+          sleep 0.01
         end
       rescue => e
         puts "Error: receive thread died: #{e}"

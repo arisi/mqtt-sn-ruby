@@ -39,7 +39,8 @@ OptionParser.new do |opts|
     options[:topic] = topic
   end
 end.parse!
-
+#require 'ruby-prof'
+#RubyProf.start
 puts "MQTT-SN-PUB: #{options.to_json}"
 begin
   sn=MqttSN.new options
@@ -47,7 +48,9 @@ begin
   sn.send :searchgw #replies may or may not come -- even multiple!
   sn.publish options[:topic]||"test/message/123", options[:msg]||"test_value", qos: options[:qos]
   puts "Sent ok."
-  sleep 2 #allow log tu purge ;)
+  while not sn.log_empty?
+    sleep 0.1
+  end
 rescue SystemExit, Interrupt
   puts "\nExiting after Disconnect\n"
 rescue => e
@@ -58,3 +61,8 @@ sn.disconnect if sn
 
 puts "MQTT-SN-PUB Done."
 
+#result = RubyProf.stop
+
+# Print a flat profile to text
+#printer = RubyProf::FlatPrinter.new(result)
+#printer.print(STDOUT)
