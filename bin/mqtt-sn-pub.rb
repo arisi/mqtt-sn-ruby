@@ -37,6 +37,7 @@ OptionParser.new do |opts|
   opts.on("-t", "--topic topic", "Topic to use (test/message/123)") do |topic|
     options[:topic] = topic
   end
+  
 end.parse!
 
 puts "MQTT-SN-PUB: #{options.to_json}"

@@ -37,7 +37,9 @@ OptionParser.new do |opts|
   opts.on("-h", "--http port", "Http port for debug/status JSON server (false)") do |v|
     options[:http_port] = v.to_i
   end
-
+  opts.on("-k", "--keepalive dur", "Keepalive timer, in seconds. Will ping with this interval. (25)") do |topic|
+    options[:keepalive] = topic
+  end
 end.parse!
 
 $sn=MqttSN.new options

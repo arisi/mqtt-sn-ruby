@@ -18,6 +18,8 @@ Supported Features:
 New Features:
 - Multicast on UDP to emulate radio network broadcast, you can leave gateway unspecified -- it will be discovered!
 - Verbose log now with timestamp and correct ports et al.
+- Keepalive ping 
+- Http server at Publish & Forwarder utils. Allows JSON-status queries.
 
 First install the gem:
 
@@ -76,6 +78,8 @@ Usage: mqtt-sn-sub.rb [options]
     -q, --qos level        QoS level (0)
     -i, --id id            This client id -- free choice (hostname-pid)
     -t, --topic topic      Topic to subscribe (test/message/123)
+    -k, --keepalive dur    Keepalive timer, in seconds. Will ping with this interval. (25)
+
 ```
 
 - Forwarder, from UDP server:socket to another UDP server:socket.  Displays packets on screen as they are forwarder, great for debugging! Press Control-C to Quit.

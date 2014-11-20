@@ -103,19 +103,22 @@ class MqttSN
     end
   end
 
-  def self.open_multicast_send_port port
-    ip =  IPAddr.new(MULTICAST_ADDR).hton + IPAddr.new("0.0.0.0").hton
+  def open_multicast_send_port 
+    uri = URI.parse(@broadcast_uri)
+      
+    ip =  IPAddr.new(uri.host).hton + IPAddr.new("0.0.0.0").hton
     socket_b = UDPSocket.new
     socket_b.setsockopt(Socket::IPPROTO_IP, Socket::IP_TTL, [1].pack('i'))
     socket_b
   end
 
-  def self.open_multicast_recv_port port 
-    ip =  IPAddr.new(MULTICAST_ADDR).hton + IPAddr.new("0.0.0.0").hton
+  def open_multicast_recv_port  
+    uri = URI.parse(@broadcast_uri)
+    ip =  IPAddr.new(uri.host).hton + IPAddr.new("0.0.0.0").hton
     s = UDPSocket.new
     s.setsockopt(Socket::IPPROTO_IP, Socket::IP_ADD_MEMBERSHIP, ip)
     s.setsockopt(:SOL_SOCKET, :SO_REUSEPORT, 1)
-    s.bind(Socket::INADDR_ANY, port)
+    s.bind(Socket::INADDR_ANY, uri.port)
     s
   end
 
@@ -131,6 +134,7 @@ class MqttSN
       @verbose=hash[:verbose]
       @state=:inited
       @bcast_port=5000
+      @keepalive=hash[:keepalive]||25
       @forwarder=hash[:forwarder] #flag to indicate forward mode 
       @will_topic=nil
       @will_msg=nil
@@ -142,6 +146,7 @@ class MqttSN
       @gateways={}
       @autodiscovery=false
       @broadcast_uri="udp://225.4.5.6:5000"
+
       if @server_uri
         puts "adding default gateway #{@server_uri}"
         @gateways[0]={stamp: Time.now.to_i,uri: @server_uri, duration: 0, source: 'default', status: :ok}
@@ -163,8 +168,8 @@ class MqttSN
       @iq = Queue.new
       @dataq = Queue.new
       
-      @bcast_s=MqttSN::open_multicast_send_port @bcast_port
-      @bcast=MqttSN::open_multicast_recv_port @bcast_port
+      @bcast_s=open_multicast_send_port
+      @bcast=open_multicast_recv_port 
 
       @roam_t=Thread.new do
         roam_thread @bcast
@@ -176,9 +181,7 @@ class MqttSN
         @s.bind("0.0.0.0",@local_port)
         @bcast_period=60
       else
-        @client_t=Thread.new do
-          client_thread 
-        end
+        client_thread 
       end
   end
 
@@ -223,7 +226,7 @@ class MqttSN
               mm=MqttSN::parse_message rr
               _,port,_,_ = @clients[my_key][:socket].addr
               dest="#{@server}:#{port}"
-              logger "so %-24.24s <- %-24.24s | %s",@clients[my_key][:uri],@gateways[@active_gw_id][:uri],mm.to_json
+              logger "sc %-24.24s <- %-24.24s | %s",@clients[my_key][:uri],@gateways[@active_gw_id][:uri],mm.to_json
               case mm[:type]
               when :disconnect
                 @clients[my_key][:state]=:disconnected
@@ -239,7 +242,7 @@ class MqttSN
         sbytes=@clients[key][:socket].send(r, 0, @server, @port) # to rsmb -- ok as is
         _,port,_,_ = @clients[key][:socket].addr
         dest="#{@server}:#{port}"
-        logger "ci %-24.24s -> %-24.24s | %s", @clients[key][:uri],@gateways[@active_gw_id][:uri],m.to_json
+        logger "cs %-24.24s -> %-24.24s | %s", @clients[key][:uri],@gateways[@active_gw_id][:uri],m.to_json
       
        end
     end
@@ -552,8 +555,8 @@ class MqttSN
     @will_msg=msg
   end
 
-  def connect id,duration=30
-    send :connect,id: id, clean: false, duration: duration, expect: [:connect_ack,:will_topic_req] do |s,m| #add will here!
+  def connect id
+    send :connect,id: id, clean: false, duration: @keepalive, expect: [:connect_ack,:will_topic_req] do |s,m| #add will here!
       if s==:ok
         if m[:type]==:will_topic_req
           puts "will topic!"
@@ -738,6 +741,8 @@ class MqttSN
       duration=(r[3].ord<<8)+r[4].ord
       m={type: :advertise, gw_id: r[2].ord, duration: duration, status: :ok}
 
+    when PINGREQ_TYPE
+      m={type: :ping, status: :ok}
     when PINGRESP_TYPE
       m={type: :pong, status: :ok}
 
@@ -792,26 +797,46 @@ class MqttSN
   end
 
   def client_thread 
-    while true do
-      begin
-        if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] #if we are connected...
-          pac=MqttSN::poll_packet_block(@gateways[@active_gw_id][:socket])
-          r,client_ip,client_port=pac 
-          m=MqttSN::parse_message r
-          if @debug and m
-            m[:debug]=MqttSN::hexdump r
+    Thread.new do #ping thread
+      while true do
+        begin
+          sleep @keepalive
+          if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] #if we are connected...
+           send :ping, timeout: 2,expect: :pong do |status,message|
+              if status!=:ok
+                note "Error:#{@id} no pong! -- need to switch gateway  & restart comms"
+              end
+            end
           end
-          dest="#{client_ip}:#{client_port}"
-          _,port,_,_= @gateways[@active_gw_id][:socket].addr
-          src="udp://0.0.0.0:#{port}"
-          logger "id %-24.24s -> %-24.24s | %s",@gateways[@active_gw_id][:uri],src,m.to_json
-          process_message m
-        else
-          sleep 0.01
+        rescue => e
+          puts "Error: receive thread died: #{e}"
+          pp e.backtrace
         end
-      rescue => e
-        puts "Error: receive thread died: #{e}"
-        pp e.backtrace
+      end
+    end
+
+    Thread.new do #work thread
+      while true do
+        begin
+          if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] #if we are connected...
+            pac=MqttSN::poll_packet_block(@gateways[@active_gw_id][:socket])
+            r,client_ip,client_port=pac 
+            m=MqttSN::parse_message r
+            if @debug and m
+              m[:debug]=MqttSN::hexdump r
+            end
+            dest="#{client_ip}:#{client_port}"
+            _,port,_,_= @gateways[@active_gw_id][:socket].addr
+            src="udp://0.0.0.0:#{port}"
+            logger "id %-24.24s -> %-24.24s | %s",@gateways[@active_gw_id][:uri],src,m.to_json
+            process_message m
+          else
+            sleep 0.01
+          end
+        rescue => e
+          puts "Error: receive thread died: #{e}"
+          pp e.backtrace
+        end
       end
     end
   end
