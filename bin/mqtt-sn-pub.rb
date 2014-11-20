@@ -22,8 +22,7 @@ OptionParser.new do |opts|
   opts.on("-d", "--[no-]debug", "Produce Debug dump on console (false)") do |v|
     options[:debug] = v
   end
-  options[:server_uri] = "udp://localhost:1883"
-  opts.on("-s", "--server uri", "URI of the MQTT-SN Server to connect to (udp://localhost:1883)") do |v|
+  opts.on("-s", "--server uri", "URI of the MQTT-SN Server to connect to. Example udp://localhost:1883. Default: Use Autodiscovery.") do |v|
     options[:server_uri] = v
   end
   opts.on("-q", "--qos level", "QoS level (0)") do |v|
@@ -39,8 +38,7 @@ OptionParser.new do |opts|
     options[:topic] = topic
   end
 end.parse!
-#require 'ruby-prof'
-#RubyProf.start
+
 puts "MQTT-SN-PUB: #{options.to_json}"
 begin
   sn=MqttSN.new options
@@ -57,9 +55,3 @@ end
 sn.disconnect if sn
 
 puts "MQTT-SN-PUB Done."
-
-#result = RubyProf.stop
-
-# Print a flat profile to text
-#printer = RubyProf::FlatPrinter.new(result)
-#printer.print(STDOUT)

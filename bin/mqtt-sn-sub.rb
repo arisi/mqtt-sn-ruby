@@ -22,8 +22,7 @@ OptionParser.new do |opts|
   opts.on("-d", "--[no-]debug", "Produce Debug dump on console (false)") do |v|
     options[:debug] = v
   end
-  options[:server_uri] = "udp://localhost:1883"
-  opts.on("-s", "--server uri", "URI of the MQTT-SN Server to connect to (udp://localhost:1883)") do |v|
+  opts.on("-s", "--server uri"," URI of the MQTT-SN Server to connect to. Example udp://localhost:1883. Default: Use Autodiscovery.") do |v|
     options[:server_uri] = v
   end
   opts.on("-q", "--qos level", "QoS level (0)") do |v|

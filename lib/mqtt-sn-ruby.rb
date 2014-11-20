@@ -67,7 +67,7 @@ class MqttSN
   end
 
   def log_flush
-    while not sn.log_empty?
+    while not log_empty?
       sleep 0.1
     end
   end
@@ -125,7 +125,7 @@ class MqttSN
 
   def initialize(hash={})
       @options=hash #save these
-      @server_uri=hash[:server_uri]||"udp://localhost:1883"
+      @server_uri=hash[:server_uri]
       @debug=hash[:debug]
       @verbose=hash[:verbose]
       @state=:inited
@@ -139,6 +139,17 @@ class MqttSN
       @msg_id=1
       @clients={}
       @gateways={}
+      @autodiscovery=false
+      if @server_uri
+        puts "adding default gateway #{@server_uri}"
+        @gateways[0]={stamp: Time.now.to_i,uri: @server_uri, duration: 0, source: 'default', status: :ok}
+        pick_new_gateway 
+        pp @gateways
+      else
+        puts "Autodiscovery Active"
+        @autodiscovery=true
+      end
+
       @log_q = Queue.new #log queue :) 
 
       @log_t=Thread.new do
@@ -150,27 +161,24 @@ class MqttSN
       @iq = Queue.new
       @dataq = Queue.new
       
-
       @bcast_s=MqttSN::open_multicast_send_port @bcast_port
       @bcast=MqttSN::open_multicast_recv_port @bcast_port
 
       @roam_t=Thread.new do
         roam_thread @bcast
       end
-      if not @forwarder
-         @client_t=Thread.new do
-          client_thread @s
-        end
-      else
+      if @forwarder
         @s,@server,@port = MqttSN::open_port @server_uri
         puts "Open port to Gateway: #{@server_uri}: #{@server},#{@port} -- local port: #{@local_port}"
         @local_port=hash[:local_port]||1883
         @s.bind("0.0.0.0",@local_port)
         @bcast_period=60
+      else
+        @client_t=Thread.new do
+          client_thread 
+        end
       end
- 
   end
-
 
   def forwarder_thread
     if not @forwarder 
@@ -771,7 +779,7 @@ class MqttSN
     m
   end
 
-  def client_thread socket
+  def client_thread 
     while true do
       begin
         if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] #if we are connected...
@@ -856,7 +864,7 @@ class MqttSN
           sleep @bcast_period
         end
       end
-    else #client should try to find some gateways..
+    elsif @autodiscovery  #client should try to find some gateways..
       Thread.new do
         while true do
           send :searchgw #replies may or may not come -- even multiple!

@@ -9,6 +9,15 @@ But soon, it will be full-fledged CLI and API for MQTT-SN, all in Ruby.
 
 You can use it for testing, and for building gateways from packet radio ... or CAN, or whatever.
 
+Supported Features:
+- QoS 0,1,2
+- LWT (Last Will and Testament)
+- Transparent forwarder -- from UDP to UDP 
+- ADVERTISE, SEARCHGW and GWINFO autodiscovery
+
+New Features:
+- Multicast on UDP to emulate radio network broadcast, you can leave gateway unspecified -- it will be discovered!
+
 First install the gem:
 
 ```shell
@@ -39,7 +48,7 @@ end
 sn.disconnect
 ```
 gem also provides some command line utilities:
-
+(Multicast UDP is used to emulate radio network's broadcast.)
 
 - Publish utility, use this to subscribe messages.
 ```shell
@@ -48,7 +57,7 @@ $ mqtt-sn-pub.rb
 Usage: mqtt-sn-sub.rb [options]
     -v, --[no-]verbose     Run verbosely (false)
     -d, --[no-]debug       Produce Debug dump on console (false)
-    -s, --server uri       URI of the MQTT-SN Server to connect to (udp://localhost:1883)
+    -s, --server uri       URI of the MQTT-SN Server to connect to. Example udp://localhost:1883. Default: Use Autodiscovery.
     -q, --qos level        QoS level (0)
     -i, --id id            This client id -- free choice (hostname-pid)
     -m, --msg msg          Message to send (test_value)
@@ -62,7 +71,7 @@ $ mqtt-sn-sub.rb
 Usage: mqtt-sn-sub.rb [options]
     -v, --[no-]verbose     Run verbosely (false)
     -d, --[no-]debug       Produce Debug dump on console (false)
-    -s, --server uri       URI of the MQTT-SN Server to connect to (udp://localhost:1883)
+    -s, --server uri       URI of the MQTT-SN Server to connect to.  Example udp://localhost:1883. Default: Use Autodiscovery.
     -q, --qos level        QoS level (0)
     -i, --id id            This client id -- free choice (hostname-pid)
     -t, --topic topic      Topic to subscribe (test/message/123)
