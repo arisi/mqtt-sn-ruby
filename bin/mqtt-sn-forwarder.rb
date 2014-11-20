@@ -14,7 +14,7 @@ else
   require 'mqtt-sn-ruby'
 end
 
-options = {}
+options = {forwarder: true}
 OptionParser.new do |opts|
   opts.banner = "Usage: mqtt-sn-sub.rb [options]"
 
@@ -32,7 +32,7 @@ OptionParser.new do |opts|
     options[:local_port] = v.to_i
   end 
   options[:gw_id] = 123
-  opts.on("-i", "--id GwId", "MQTT-SN if of this GateWay (123)") do |v|
+  opts.on("-i", "--id GwId", "MQTT-SN id of this GateWay (123)") do |v|
     options[:gw_id] = v.to_i
   end 
   opts.on("-h", "--http port", "Http port for debug/status JSON server (false)") do |v|
@@ -40,37 +40,52 @@ OptionParser.new do |opts|
   end
 end.parse!
 
-
+$sn=MqttSN.new options
 if options[:http_port]
-  require "sinatra/base"
   puts "Starting HTTP services at port #{options[:http_port]}"
-  @hp=options[:http_port]
-  class MySinatra < Sinatra::Base
-    set :bind, '0.0.0.0'
-    set :port, @hp
-
-    get "/clients" do
-      content_type :json
-      MqttSN.get_clients.to_json
-    end
-    get "/gateways" do
-      content_type :json
-      MqttSN.get_gateways.to_json
-    end
-  end
+  $hp=options[:http_port]
   Thread.new do
-    MySinatra.run!
+    server = TCPServer.new("20.20.20.21",$hp)
+    loop do
+      Thread.start(server.accept) do |client|
+        request = client.gets.split " "
+        type="text/html"
+        case request[1]
+        when '/gw'
+          response=$sn.gateways.to_json
+          status="200 OK"
+          type="text/json"
+        when '/cli'
+          response=$sn.clients.to_json
+          status="200 OK"
+          type="text/json"
+        else
+          status="404 Not Found"
+          response="?que"
+        end
+        client.print "HTTP/1.1 #{status}\r\n" +
+               "Content-Type: #{type}\r\n" +
+               "Content-Length: #{response.bytesize}\r\n" +
+               "Connection: close\r\n"
+        client.print "\r\n"
+        client.print response 
+        client.close
+        puts "#{request} -> #{response}"
+      end
+    end
   end
 end
-options[:forwarder]=true
+
 puts "MQTT-SN-FORWARDER: #{options.to_json}"
+
 begin
-  f=MqttSN.new options
+  $sn.forwarder_thread
 rescue SystemExit, Interrupt
   puts "\nExiting after Disconnect\n"
 rescue => e
   puts "\nError: '#{e}' -- Quit after Disconnect\n"
   pp e.backtrace
 end
+$sn.kill_clients #if $sn
 
 puts "MQTT-SN-FORWARDER Done."

@@ -45,12 +45,9 @@ puts "MQTT-SN-PUB: #{options.to_json}"
 begin
   sn=MqttSN.new options
   sn.connect options[:id]
-  sn.send :searchgw #replies may or may not come -- even multiple!
   sn.publish options[:topic]||"test/message/123", options[:msg]||"test_value", qos: options[:qos]
   puts "Sent ok."
-  while not sn.log_empty?
-    sleep 0.1
-  end
+  sn.log_flush
 rescue SystemExit, Interrupt
   puts "\nExiting after Disconnect\n"
 rescue => e

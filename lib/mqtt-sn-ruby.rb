@@ -61,7 +61,33 @@ class MqttSN
   def note str,*args
     @log_q << sprintf(str,*args)
   end
-  
+
+  def log_empty?
+    @log_q.empty? or not @verbose
+  end
+
+  def log_flush
+    while not sn.log_empty?
+      sleep 0.1
+    end
+  end
+
+  def log_thread 
+    while true do
+      begin
+        if not @log_q.empty?
+          l=@log_q.pop
+          puts l
+        else
+          sleep 0.01
+        end
+      rescue => e
+        puts "Error: receive thread died: #{e}"
+        pp e.backtrace
+      end
+    end
+  end
+
   def self.open_port uri_s
     begin
       uri = URI.parse(uri_s)
@@ -92,6 +118,11 @@ class MqttSN
     s
   end
 
+
+  attr_accessor :clients
+  attr_accessor :gateways
+
+
   def initialize(hash={})
       @options=hash #save these
       @server_uri=hash[:server_uri]||"udp://localhost:1883"
@@ -99,12 +130,11 @@ class MqttSN
       @verbose=hash[:verbose]
       @state=:inited
       @bcast_port=5000
-      @bcast_period=10
-      @forward=hash[:forward] #flag to indicate forward mode 
+      @forwarder=hash[:forwarder] #flag to indicate forward mode 
       @will_topic=nil
       @will_msg=nil
+      @active_gw_id=nil
       @id="?"
-
 
       @msg_id=1
       @clients={}
@@ -115,12 +145,11 @@ class MqttSN
         log_thread
       end
 
-
       @sem=Mutex.new 
       @topics={} #hash of registered topics is stored here
       @iq = Queue.new
       @dataq = Queue.new
-      @s,@server,@port = MqttSN::open_port @server_uri
+      
 
       @bcast_s=MqttSN::open_multicast_send_port @bcast_port
       @bcast=MqttSN::open_multicast_recv_port @bcast_port
@@ -128,22 +157,25 @@ class MqttSN
       @roam_t=Thread.new do
         roam_thread @bcast
       end
-      if not @options[:forwarder]
-        @client_t=Thread.new do
+      if not @forwarder
+         @client_t=Thread.new do
           client_thread @s
         end
       else
-        @s.bind("0.0.0.0",hash[:local_port]||1883)
+        @s,@server,@port = MqttSN::open_port @server_uri
+        puts "Open port to Gateway: #{@server_uri}: #{@server},#{@port} -- local port: #{@local_port}"
+        @local_port=hash[:local_port]||1883
+        @s.bind("0.0.0.0",@local_port)
         @bcast_period=60
-        loop do      
-          forwarder_thread @s
-        end
       end
  
   end
 
 
-  def forwarder_thread socket
+  def forwarder_thread
+    if not @forwarder 
+      raise "Cannot Forward if no Forwarder!"
+    end
     begin 
       last_kill=0
       stime=Time.now.to_i
@@ -165,7 +197,7 @@ class MqttSN
         end
       end
       while true
-        pac=MqttSN::poll_packet_block(socket) #data from clients to our service sovket
+        pac=MqttSN::poll_packet_block(@s) #data from clients to our service sovket
         r,client_ip,client_port=pac
         key="#{client_ip}:#{client_port}"
         if not @clients[key]
@@ -202,6 +234,16 @@ class MqttSN
     end
   end
 
+  def kill_clients
+    puts "Killing Clients:"
+    @clients.each do |key,c|
+      puts "Killing #{key}"
+      send_packet [DISCONNECT_TYPE],@s,c[:ip], c[:port]
+      send_packet [DISCONNECT_TYPE],c[:socket], @server,@port
+    end
+    puts "Killing Clients Done."
+  end
+
 
   def self.hexdump data
     raw=""
@@ -225,7 +267,7 @@ class MqttSN
 
   def send type,hash={},&block
     #puts ""  if @verbose
-    if @state!=:connected and type!=:connect and type!=:will_topic  and type!=:will_msg
+    if @state!=:connected and type!=:connect and type!=:will_topic  and type!=:will_msg  and type!=:searchgw
       if type==:disconnect
         return #already disconnected.. nothing to do
       else
@@ -241,7 +283,7 @@ class MqttSN
       flags+=CLEAN_FLAG if hash[:clean]
       flags+=RETAIN_FLAG if hash[:retain]
       flags+=WILL_FLAG if @will_topic
-      p=[CONNECT_TYPE,flags,0x01,0,30]
+      p=[CONNECT_TYPE,flags,0x01,hash[:duration]>>8 ,hash[:duration] & 0xff]
       hash[:id].each_byte do |b|
         p<<b
       end
@@ -347,7 +389,7 @@ class MqttSN
       if type==:searchgw
         raw=send_packet p,@bcast,MULTICAST_ADDR,@bcast_port
       else
-        raw=send_packet p,@s,@server,@port
+        raw=send_packet_gw p
       end
       hash[:debug]=raw if @debug
       return
@@ -363,7 +405,7 @@ class MqttSN
       if type==:searchgw
         raw=send_packet p,@bcast,MULTICAST_ADDR,@bcast_port
       else
-        raw=send_packet p,@s,@server,@port
+        raw=send_packet_gw p
       end
       hash[:debug]=raw if @debug
       #puts "send:#{@id} #{type},#{hash.to_json}" if @verbose
@@ -388,7 +430,7 @@ class MqttSN
             break
           else
             retries+=1
-            send_packet p,@s,@server,@port
+            send_packet_gw p
             puts "fail to get ack, retry #{retries} :#{@id} #{type},#{hash.to_json}"
             #need to set DUP flag !
           end
@@ -419,6 +461,28 @@ class MqttSN
     logger "< %-18.18s <- %-18.18s | %s",dest,src,MqttSN::parse_message(msg).to_json
   end
 
+  def send_packet_gw m
+    msg=MqttSN::build_packet m
+    waits=0
+    while not @active_gw_id or not @gateways[@active_gw_id] or not @gateways[@active_gw_id][:socket] 
+      sleep 0.1
+      waits+=1
+      break if waits>30
+    end
+    if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] 
+      #get server & port from uri!
+      uri=URI.parse(@gateways[@active_gw_id][:uri])
+      #uri.scheme
+      MqttSN::send_raw_packet msg,@gateways[@active_gw_id][:socket],uri.host,uri.port
+      _,port,_,_ = @gateways[@active_gw_id][:socket].addr
+      src="udp://0.0.0.0:#{port}"
+      logger "< %-24.24s <- %-24.24s | %s",@gateways[@active_gw_id][:uri],src,MqttSN::parse_message(msg).to_json
+    else
+      puts "no gw to send.."
+      sleep 1
+    end
+  end
+
   def self.poll_packet socket
     #decide how to get data -- UDP-socket or FM-radio
     begin
@@ -442,15 +506,6 @@ class MqttSN
     client_port=stuff[1]
     return [r,client_ip,client_port]
   end
-
-  def self.get_clients
-    @clients
-  end
-
-  def self.get_gateways
-    @gateways
-  end
-
   
   def will_and_testament topic,msg
     if @state==:connected #if already connected, send changes, otherwise wait until connect does it.
@@ -477,8 +532,8 @@ class MqttSN
     @will_msg=msg
   end
 
-  def connect id
-    send :connect,id: id, clean: true, expect: [:connect_ack,:will_topic_req] do |s,m| #add will here!
+  def connect id,duration=30
+    send :connect,id: id, clean: false, duration: duration, expect: [:connect_ack,:will_topic_req] do |s,m| #add will here!
       if s==:ok
         if m[:type]==:will_topic_req
           puts "will topic!"
@@ -719,16 +774,17 @@ class MqttSN
   def client_thread socket
     while true do
       begin
-        if pac=MqttSN::poll_packet_block(socket)
+        if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] #if we are connected...
+          pac=MqttSN::poll_packet_block(@gateways[@active_gw_id][:socket])
           r,client_ip,client_port=pac 
           m=MqttSN::parse_message r
           if @debug and m
             m[:debug]=MqttSN::hexdump r
           end
           dest="#{client_ip}:#{client_port}"
-          _,port,_,_ = @s.addr
-          src=port
-          logger "> %-18.18s -> %-18.18s | %s",dest,":#{port}",m.to_json
+          _,port,_,_= @gateways[@active_gw_id][:socket].addr
+          src="udp://0.0.0.0:#{port}"
+          logger "i %-24.24s -> %-24.24s | %s",@gateways[@active_gw_id][:uri],src,m.to_json
           process_message m
         else
           sleep 0.01
@@ -743,34 +799,82 @@ class MqttSN
   def process_broadcast_message m,client_ip,client_port
     case m[:type]
     when :searchgw
-      note "hey, someone is looking for gateway..."
       key="#{client_ip}:#{client_port}"
       dest="#{MULTICAST_ADDR};#{@bcast_port}"
       #actually -- send data on all gateways we know...
-      if @options[:forwarder]
+      if @forwarder
         logger "r %-18.18s -> %-18.18s | %s",key,dest,m.to_json
         send_packet [GWINFO_TYPE,@options[:gw_id]],@bcast_s,MULTICAST_ADDR,@bcast_port
       end
     when :advertise,:gwinfo
-      note "hey, we have gateway there!"
-      if not @gateways[client_ip]
-         @gateways[client_ip]={stamp: Time.now.to_i}
+      gw_id=m[:gw_id]  
+      duration=m[:duration]||180
+      uri="udp://#{client_ip}:1882"
+      if not @gateways[gw_id]
+         @gateways[gw_id]={stamp: Time.now.to_i,uri: uri, duration: duration, source: m[:type], status: :ok}
       else
-         @gateways[client_ip][:stamp]=Time.now.to_i
+        if @gateways[gw_id][:uri]!=uri
+          note "conflict -- gateway has moved? or duplicate"
+        else
+          @gateways[gw_id][:stamp]=Time.now.to_i
+          @gateways[gw_id][:duration]=duration 
+          @gateways[gw_id][:source]=m[:type] 
+        end
       end
-      @gateways[client_ip][:gw_id]=m[:gw_id]
-      @gateways[client_ip][:duration]=m[:duration]
-      note "gw: #{@gateways.to_json}"
+    end
+  end
+
+
+  def pick_new_gateway 
+    begin
+      use_gw=nil
+      @gateways.each do |gw_id,data|
+        if data[:uri]
+          use_gw=gw_id
+        end
+      end
+      if use_gw
+        @active_gw_id=use_gw
+        puts "using gateway #{@active_gw_id} #{@gateways[@active_gw_id][:uri]}"
+        @s,@server,@port = MqttSN::open_port @gateways[@active_gw_id][:uri]
+        @gateways[use_gw][:socket]=@s
+      else
+        #note "Error: no usable gw found !!"
+      end
+    rescue => e
+      puts "Error: receive thread died: #{e}"
+      pp e.backtrace
     end
   end
 
   def roam_thread socket
     @last_bcast=0
-    if @options[:forwarder]
+    if @forwarder
       Thread.new do
         while true do
           send_packet [ADVERTISE_TYPE,@options[:gw_id],@bcast_period>>8,@bcast_period&0xff],@bcast_s,MULTICAST_ADDR,@bcast_port
           sleep @bcast_period
+        end
+      end
+    else #client should try to find some gateways..
+      Thread.new do
+        while true do
+          send :searchgw #replies may or may not come -- even multiple!
+          if @gateways=={}
+            sleep 5
+          else
+            #pp @gateways
+            sleep 30
+          end
+        end
+      end
+      Thread.new do
+        while true do
+          if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket]
+          else # not so ok -- pick one!
+            pick_new_gateway 
+          end
+          sleep 0.01
         end
       end
     end
@@ -796,24 +900,6 @@ class MqttSN
     end
   end
 
-  def log_empty?
-    @log_q.empty? or not @verbose
-  end
 
-  def log_thread 
-    while true do
-      begin
-        if not @log_q.empty?
-          l=@log_q.pop
-          puts l
-        else
-          sleep 0.01
-        end
-      rescue => e
-        puts "Error: receive thread died: #{e}"
-        pp e.backtrace
-      end
-    end
-  end
 
 end
