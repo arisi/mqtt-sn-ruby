@@ -17,6 +17,7 @@ Supported Features:
 
 New Features:
 - Multicast on UDP to emulate radio network broadcast, you can leave gateway unspecified -- it will be discovered!
+- Verbose log now with timestamp and correct ports et al.
 
 First install the gem:
 

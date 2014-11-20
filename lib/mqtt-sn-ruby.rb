@@ -6,6 +6,7 @@ require 'socket'
 require 'json'
 require 'uri'
 require 'ipaddr'
+require 'time'
 
 
 class MqttSN
@@ -54,7 +55,7 @@ class MqttSN
 
   def logger str,*args
     if @verbose or @debug
-      @log_q << sprintf(str,*args)
+      @log_q << Time.now.iso8601+" "+sprintf(str,*args)
     end
   end
 
@@ -140,6 +141,7 @@ class MqttSN
       @clients={}
       @gateways={}
       @autodiscovery=false
+      @broadcast_uri="udp://225.4.5.6:5000"
       if @server_uri
         puts "adding default gateway #{@server_uri}"
         @gateways[0]={stamp: Time.now.to_i,uri: @server_uri, duration: 0, source: 'default', status: :ok}
@@ -209,7 +211,8 @@ class MqttSN
         r,client_ip,client_port=pac
         key="#{client_ip}:#{client_port}"
         if not @clients[key]
-          @clients[key]={ip:client_ip, port:client_port, socket: UDPSocket.new, state: :active  }
+          uri="udp://#{client_ip}:#{client_port}"
+          @clients[key]={ip:client_ip, port:client_port, socket: UDPSocket.new, uri: uri, state: :active  }
           c=@clients[key]
           puts "thread start for #{key}"
           @clients[key][:thread]=Thread.new(key) do |my_key|
@@ -220,7 +223,7 @@ class MqttSN
               mm=MqttSN::parse_message rr
               _,port,_,_ = @clients[my_key][:socket].addr
               dest="#{@server}:#{port}"
-              logger "S %-18.18s <- %-18.18s | %s",my_key,dest,mm.to_json
+              logger "so %-24.24s <- %-24.24s | %s",@clients[my_key][:uri],@gateways[@active_gw_id][:uri],mm.to_json
               case mm[:type]
               when :disconnect
                 @clients[my_key][:state]=:disconnected
@@ -236,7 +239,7 @@ class MqttSN
         sbytes=@clients[key][:socket].send(r, 0, @server, @port) # to rsmb -- ok as is
         _,port,_,_ = @clients[key][:socket].addr
         dest="#{@server}:#{port}"
-        logger "C %-18.18s -> %-18.18s | %s",key,dest,m.to_json
+        logger "ci %-24.24s -> %-24.24s | %s", @clients[key][:uri],@gateways[@active_gw_id][:uri],m.to_json
       
        end
     end
@@ -395,7 +398,7 @@ class MqttSN
     m={}
     if not hash[:expect]
       if type==:searchgw
-        raw=send_packet p,@bcast,MULTICAST_ADDR,@bcast_port
+        raw=send_packet_bcast p
       else
         raw=send_packet_gw p
       end
@@ -411,7 +414,7 @@ class MqttSN
         @iq.clear
       end
       if type==:searchgw
-        raw=send_packet p,@bcast,MULTICAST_ADDR,@bcast_port
+        raw=send_packet_bcast p
       else
         raw=send_packet_gw p
       end
@@ -466,7 +469,16 @@ class MqttSN
     dest="#{server}:#{port}"
      _,port,_,_ = socket.addr
     src=":#{port}"
-    logger "< %-18.18s <- %-18.18s | %s",dest,src,MqttSN::parse_message(msg).to_json
+    logger "od %-18.18s <- %-18.18s | %s",dest,src,MqttSN::parse_message(msg).to_json
+  end
+
+  def send_packet_bcast m
+    socket,server,port=[@bcast_s,MULTICAST_ADDR,@bcast_port]
+    msg=MqttSN::build_packet m
+    MqttSN::send_raw_packet msg,socket,server,port
+     _,port,_,_ = socket.addr
+    src="udp://0.0.0.0:#{port}"
+    logger "ob %-24.24s <- %-24.24s | %s",@broadcast_uri,src,MqttSN::parse_message(msg).to_json
   end
 
   def send_packet_gw m
@@ -484,7 +496,7 @@ class MqttSN
       MqttSN::send_raw_packet msg,@gateways[@active_gw_id][:socket],uri.host,uri.port
       _,port,_,_ = @gateways[@active_gw_id][:socket].addr
       src="udp://0.0.0.0:#{port}"
-      logger "< %-24.24s <- %-24.24s | %s",@gateways[@active_gw_id][:uri],src,MqttSN::parse_message(msg).to_json
+      logger "od %-24.24s <- %-24.24s | %s",@gateways[@active_gw_id][:uri],src,MqttSN::parse_message(msg).to_json
     else
       puts "no gw to send.."
       sleep 1
@@ -792,7 +804,7 @@ class MqttSN
           dest="#{client_ip}:#{client_port}"
           _,port,_,_= @gateways[@active_gw_id][:socket].addr
           src="udp://0.0.0.0:#{port}"
-          logger "i %-24.24s -> %-24.24s | %s",@gateways[@active_gw_id][:uri],src,m.to_json
+          logger "id %-24.24s -> %-24.24s | %s",@gateways[@active_gw_id][:uri],src,m.to_json
           process_message m
         else
           sleep 0.01
@@ -807,12 +819,10 @@ class MqttSN
   def process_broadcast_message m,client_ip,client_port
     case m[:type]
     when :searchgw
-      key="#{client_ip}:#{client_port}"
-      dest="#{MULTICAST_ADDR};#{@bcast_port}"
-      #actually -- send data on all gateways we know...
       if @forwarder
-        logger "r %-18.18s -> %-18.18s | %s",key,dest,m.to_json
-        send_packet [GWINFO_TYPE,@options[:gw_id]],@bcast_s,MULTICAST_ADDR,@bcast_port
+        _,port,_,_=@bcast.addr
+        #logger "ib %-24.24s -> %-24.24s | %s","udp://0.0.0.0:#{port}",@broadcast_uri,m.to_json
+        send_packet_bcast [GWINFO_TYPE,@options[:gw_id]]
       end
     when :advertise,:gwinfo
       gw_id=m[:gw_id]  
@@ -860,7 +870,7 @@ class MqttSN
     if @forwarder
       Thread.new do
         while true do
-          send_packet [ADVERTISE_TYPE,@options[:gw_id],@bcast_period>>8,@bcast_period&0xff],@bcast_s,MULTICAST_ADDR,@bcast_port
+          send_packet_bcast [ADVERTISE_TYPE,@options[:gw_id],@bcast_period>>8,@bcast_period&0xff]
           sleep @bcast_period
         end
       end
@@ -895,10 +905,9 @@ class MqttSN
           if @debug and m
             m[:debug]=MqttSN::hexdump r
           end
-          dest="#{client_ip}:#{client_port}"
           _,port,_,_ = @bcast.addr
-          src=port
-          logger "R %-18.18s <- %-18.18s | %s",dest,":#{port}",m.to_json
+          src="udp://#{client_ip}:#{client_port}"
+          logger "ib %-24.24s <- %-24.24s | %s",@broadcast_uri,src,m.to_json
           process_broadcast_message m,client_ip,client_port
         end
       rescue => e
