@@ -25,7 +25,7 @@ OptionParser.new do |opts|
   opts.on("-s", "--server uri", "URI of the MQTT-SN Server to connect to. Example udp://localhost:1883. Default: Use Autodiscovery.") do |v|
     options[:server_uri] = v
   end
-  opts.on("-q", "--qos level", "QoS level (0)") do |v|
+  opts.on("-q", "--qos level", "QoS level (0). When using QoS -1, you must provide either Short Topic (2-char) or Topic_Id") do |v|
     options[:qos] = v.to_i
   end
   opts.on("-i", "--id id", "This client's id -- free choice (hostname-pid)") do |name|
@@ -34,7 +34,7 @@ OptionParser.new do |opts|
   opts.on("-m", "--msg msg", "Message to send (test_value)") do |msg|
     options[:msg] = msg
   end
-  opts.on("-t", "--topic topic", "Topic to use (test/message/123)") do |topic|
+  opts.on("-t", "--topic topic", "Topic to use (test/message/123). For predefined Topics, use this notation '=123'") do |topic|
     options[:topic] = topic
   end
   

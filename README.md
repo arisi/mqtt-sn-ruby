@@ -22,6 +22,7 @@ New Features:
 - Http server at Publish & Forwarder utils. Allows JSON-status queries.
 - Supports 2-character short topics, detected automatically
 - Supports QoS -1
+- Predefined Topics (although RSMB does not yet(?) support them), To use predefined, set topic as "=123"
 
 First install the gem:
 

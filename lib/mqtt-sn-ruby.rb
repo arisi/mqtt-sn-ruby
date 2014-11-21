@@ -11,11 +11,9 @@ require 'time'
 
 class MqttSN
 
-  Nretry = 5  # Max retry
-  Tretry = 10 # Timeout before retry 
+  Nretry = 3  # Max retry
+  Tretry = 3 # Timeout before retry 
   
-  MULTICAST_ADDR = "225.4.5.6" 
-
   SEARCHGW_TYPE  =0x01
   GWINFO_TYPE    =0x02
   ADVERTISE_TYPE =0x03
@@ -51,6 +49,7 @@ class MqttSN
   QOS2_FLAG  =0x40
   QOS1_FLAG  =0x20
   QOS0_FLAG  =0x00
+  TOPIC_PREDEFINED_FLAG =0x01
   TOPIC_SHORT_FLAG =0x02
 
 
@@ -245,6 +244,12 @@ class MqttSN
         end
         @clients[key][:stamp]=Time.now.to_i
         m=MqttSN::parse_message r
+        case m[:type]
+        when :publish
+          if m[:qos]==-1
+            @clients[key][:state]=:disconnected #one shot
+          end
+        end
         sbytes=@clients[key][:socket].send(r, 0, @server, @port) # to rsmb -- ok as is
         _,port,_,_ = @clients[key][:socket].addr
         dest="#{@server}:#{port}"
@@ -389,6 +394,8 @@ class MqttSN
       end
       if hash[:topic_type]==:short
         flags+=TOPIC_SHORT_FLAG
+      elsif hash[:topic_type]==:predefined
+        flags+=TOPIC_PREDEFINED_FLAG
       end
       p=[PUBLISH_TYPE,flags,hash[:topic_id] >>8 ,hash[:topic_id] & 0xff,@msg_id >>8 ,@msg_id & 0xff]
       hash[:msg].each_byte do |b|
@@ -495,10 +502,10 @@ class MqttSN
   end
 
   def send_packet_bcast m
-    socket,server,port=[@bcast_s,MULTICAST_ADDR,@bcast_port]
+    uri = URI.parse(@broadcast_uri)
     msg=MqttSN::build_packet m
-    MqttSN::send_raw_packet msg,socket,server,port
-     _,port,_,_ = socket.addr
+    MqttSN::send_raw_packet msg,@bcast_s,uri.host,uri.port
+     _,port,_,_ = @bcast_s.addr
     src="udp://0.0.0.0:#{port}"
     logger "ob %-24.24s <- %-24.24s | %s",@broadcast_uri,src,MqttSN::parse_message(msg).to_json
   end
@@ -676,15 +683,22 @@ class MqttSN
   end
 
   def publish topic,msg,hash={}
-    topic_type=:long
-    if topic.size!=2
+    puts "op='#{topic}','#{topic[0]}'"
+   
+    if topic[0]=="="
+      puts "yeah"
+      topic[0]=""
+      topic_id=topic.to_i
+      topic_type=:predefined
+    elsif topic.size==2
+      topic_id=((topic[0].ord&0xff)<<8)+(topic[1].ord&0xff)
+      topic_type=:short
+    else
+      topic_type=:long
       if not @topics[topic]
         register_topic topic
       end
       topic_id=@topics[topic]
-    else
-      topic_id=((topic[0].ord&0xff)<<8)+(topic[1].ord&0xff)
-      topic_type=:short
     end
     case hash[:qos]
     when 1
@@ -752,6 +766,9 @@ class MqttSN
       if flags&0x03==TOPIC_SHORT_FLAG
         topic_type=:short
         topic=r[3].chr+r[4].chr
+      elsif flags&0x03==TOPIC_PREDEFINED_FLAG
+        topic_type=:predefined
+        topic=""
       end
       qos=(flags>>5)&0x03
       qos=-1 if qos==3
