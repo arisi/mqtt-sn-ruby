@@ -77,16 +77,23 @@ end
 
 puts "MQTT-SN-SUB: #{options.to_json}"
 begin
- 
-  $sn.connect options[:id]
-  $sn.subscribe options[:topic]||"test/message/123", qos: options[:qos] do |s,m|
-    if s==:sub_ack
-      puts "Subscribed Ok! Waiting for Messages!"
-    else
-      puts "Got Message: #{m}"
+  loop do
+    puts "Connecting.."
+    $sn.connect options[:id] do |cs,cm|
+      puts "connect result: #{cs} #{cm}"
+      if cs==:ok 
+        puts "Subscribing.."
+        $sn.subscribe options[:topic]||"test/message/123", qos: options[:qos] do |s,m|
+          if s==:sub_ack
+            puts "Subscribed Ok! Waiting for Messages!"
+          else
+            puts "Got Message: #{m}"
+          end
+        end
+      end
     end
+    puts "Disconnected..."
   end
-  puts "Disconnected..."
 rescue SystemExit, Interrupt
   puts "\nExiting after Disconnect\n"
 rescue => e

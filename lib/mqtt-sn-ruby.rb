@@ -141,6 +141,8 @@ class MqttSN
       @active_gw_id=nil
       @id="?"
 
+      @sem=Mutex.new 
+      @gsem=Mutex.new 
       @msg_id=1
       @clients={}
       @gateways={}
@@ -163,7 +165,6 @@ class MqttSN
         log_thread
       end
 
-      @sem=Mutex.new 
       @topics={} #hash of registered topics is stored here
       @iq = Queue.new
       @dataq = Queue.new
@@ -242,8 +243,11 @@ class MqttSN
         sbytes=@clients[key][:socket].send(r, 0, @server, @port) # to rsmb -- ok as is
         _,port,_,_ = @clients[key][:socket].addr
         dest="#{@server}:#{port}"
-        logger "cs %-24.24s -> %-24.24s | %s", @clients[key][:uri],@gateways[@active_gw_id][:uri],m.to_json
-      
+        if @active_gw_id
+          logger "cs %-24.24s -> %-24.24s | %s", @clients[key][:uri],@gateways[@active_gw_id][:uri],m.to_json
+        else
+          logger "cs %-24.24s -> %-24.24s | %s", @clients[key][:uri],"??",m.to_json
+        end
        end
     end
   end
@@ -555,7 +559,7 @@ class MqttSN
     @will_msg=msg
   end
 
-  def connect id
+  def connect id,&block
     send :connect,id: id, clean: false, duration: @keepalive, expect: [:connect_ack,:will_topic_req] do |s,m| #add will here!
       if s==:ok
         if m[:type]==:will_topic_req
@@ -567,7 +571,13 @@ class MqttSN
               end
             end
           end
+        elsif m[:type]==:connect_ack
+          puts "connected!---------------"
+          block.call :ok,m if block
         end
+      else
+        puts "failed to connect"
+        block.call :fail,m if block
       end
     end
   end
@@ -800,11 +810,16 @@ class MqttSN
     Thread.new do #ping thread
       while true do
         begin
+          while @state!=:connected 
+            sleep 1
+          end
           sleep @keepalive
           if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] #if we are connected...
-           send :ping, timeout: 2,expect: :pong do |status,message|
+            send :ping, timeout: 2,expect: :pong do |status,message|
               if status!=:ok
-                note "Error:#{@id} no pong! -- need to switch gateway  & restart comms"
+                note "Error:#{@id} no pong! -- sending disconnect to app"
+                @state=:disconnected
+                gateway_close :timeout
               end
             end
           end
@@ -819,17 +834,19 @@ class MqttSN
       while true do
         begin
           if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] #if we are connected...
-            pac=MqttSN::poll_packet_block(@gateways[@active_gw_id][:socket])
-            r,client_ip,client_port=pac 
-            m=MqttSN::parse_message r
-            if @debug and m
-              m[:debug]=MqttSN::hexdump r
+            if pac=MqttSN::poll_packet(@gateways[@active_gw_id][:socket]) #cannot block -- gateway may change...
+              r,client_ip,client_port=pac 
+              m=MqttSN::parse_message r
+              if @debug and m
+                m[:debug]=MqttSN::hexdump r
+              end
+              _,port,_,_= @gateways[@active_gw_id][:socket].addr
+              src="udp://0.0.0.0:#{port}"
+              logger "id %-24.24s -> %-24.24s | %s",@gateways[@active_gw_id][:uri],src,m.to_json
+              process_message m
+            else
+              sleep 0.01
             end
-            dest="#{client_ip}:#{client_port}"
-            _,port,_,_= @gateways[@active_gw_id][:socket].addr
-            src="udp://0.0.0.0:#{port}"
-            logger "id %-24.24s -> %-24.24s | %s",@gateways[@active_gw_id][:uri],src,m.to_json
-            process_message m
           else
             sleep 0.01
           end
@@ -854,7 +871,7 @@ class MqttSN
       duration=m[:duration]||180
       uri="udp://#{client_ip}:1882"
       if not @gateways[gw_id]
-         @gateways[gw_id]={stamp: Time.now.to_i,uri: uri, duration: duration, source: m[:type], status: :ok}
+         @gateways[gw_id]={stamp: Time.now.to_i,uri: uri, duration: duration, source: m[:type], status: :ok, last_use: 0}
       else
         if @gateways[gw_id][:uri]!=uri
           note "conflict -- gateway has moved? or duplicate"
@@ -868,21 +885,44 @@ class MqttSN
   end
 
 
+  def gateway_close cause
+    @gsem.synchronize do #one command at a time -- 
+    
+      if @active_gw_id # if using one, mark it used, so it will be last reused
+        note "closing gw #{@active_gw_id} cause: #{cause}"
+        @gateways[@active_gw_id][:last_use]=Time.now.to_i
+        if @gateways[@active_gw_id][:socket]
+          @gateways[@active_gw_id][:socket].close
+          @gateways[@active_gw_id][:socket]=nil
+        end
+        @active_gw_id=nil
+      end
+    end     
+  end
+
   def pick_new_gateway 
     begin
-      use_gw=nil
-      @gateways.each do |gw_id,data|
-        if data[:uri]
-          use_gw=gw_id
+      gateway_close nil
+      @gsem.synchronize do #one command at a time -- 
+        pick=nil
+        pick_t=0
+        @gateways.each do |gw_id,data|
+          if data[:uri] and data[:status]==:ok
+            if not pick or data[:last_use]==0  or pick_t>data[:last_use]
+              pick=gw_id
+              pick_t=data[:last_use]
+            end
+          end
         end
-      end
-      if use_gw
-        @active_gw_id=use_gw
-        puts "using gateway #{@active_gw_id} #{@gateways[@active_gw_id][:uri]}"
-        @s,@server,@port = MqttSN::open_port @gateways[@active_gw_id][:uri]
-        @gateways[use_gw][:socket]=@s
-      else
-        #note "Error: no usable gw found !!"
+        if pick
+          @active_gw_id=pick
+          note "using gateway #{@active_gw_id} #{@gateways[@active_gw_id][:uri]}"
+          @s,@server,@port = MqttSN::open_port @gateways[@active_gw_id][:uri]
+          @gateways[@active_gw_id][:socket]=@s
+          @gateways[@active_gw_id][:last_use]=Time.now.to_i
+        else
+          #note "Error: no usable gw found !!"
+        end
       end
     rescue => e
       puts "Error: receive thread died: #{e}"

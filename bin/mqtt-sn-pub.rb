@@ -43,9 +43,18 @@ end.parse!
 puts "MQTT-SN-PUB: #{options.to_json}"
 begin
   sn=MqttSN.new options
-  sn.connect options[:id]
-  sn.publish options[:topic]||"test/message/123", options[:msg]||"test_value", qos: options[:qos]
-  puts "Sent ok."
+  sent=false
+  while not sent
+    sn.connect options[:id] do |s,m|
+      if s==:ok
+        sn.publish options[:topic]||"test/message/123", options[:msg]||"test_value", qos: options[:qos]
+        puts "Sent ok."
+        sent=true
+      else
+        sn.disconnect
+      end
+    end
+  end
   sn.log_flush
 rescue SystemExit, Interrupt
   puts "\nExiting after Disconnect\n"
