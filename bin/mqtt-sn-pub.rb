@@ -41,31 +41,14 @@ OptionParser.new do |opts|
 end.parse!
 
 puts "MQTT-SN-PUB: #{options.to_json}"
+sn=MqttSN.new options
 begin
-  sn=MqttSN.new options
-  sent=false
-  if options[:qos]==-1
-    sn.publish options[:topic]||"XX", options[:msg]||"test_value", qos: options[:qos]
-    puts "Sent."
-  else
-    while not sent
-      sn.connect options[:id] do |s,m|
-        if s==:ok
-          sn.publish options[:topic]||"test/message/123", options[:msg]||"test_value", qos: options[:qos]
-          puts "Sent ok."
-          sent=true
-        else
-          sn.disconnect
-        end
-      end
-    end
-  end
-  sn.log_flush
+  sn.pub options
 rescue SystemExit, Interrupt
   puts "\nExiting after Disconnect\n"
 rescue => e
   puts "\nError: '#{e}' -- Quit after Disconnect\n"
-  pp e.backtrace
+  e.backtrace
 end
 sn.disconnect if sn
 

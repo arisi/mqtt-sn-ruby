@@ -16,28 +16,33 @@ options = {}
 OptionParser.new do |opts|
   opts.banner = "Usage: mqtt-sn-sub.rb [options]"
 
-  opts.on("-v", "--[no-]verbose", "Run verbosely (false)") do |v|
+  opts.on("-v", "--[no-]verbose", "Run verbosely; creates protocol log on console (false)") do |v|
     options[:verbose] = v
   end
-  opts.on("-d", "--[no-]debug", "Produce Debug dump on console (false)") do |v|
+  opts.on("-d", "--[no-]debug", "Produce Debug dump on verbose log (false)") do |v|
     options[:debug] = v
   end
-  opts.on("-s", "--server uri"," URI of the MQTT-SN Server to connect to. Example udp://localhost:1883. Default: Use Autodiscovery.") do |v|
+  opts.on("-s", "--server uri","URI of the MQTT-SN Server to connect to. Example udp://localhost:1883. Default: Use Autodiscovery.") do |v|
     options[:server_uri] = v
   end
-  opts.on("-q", "--qos level", "QoS level (0)") do |v|
+  options[:broadcast_uri] = "udp://225.4.5.6:5000"
+  opts.on("-b", "--[no-]broadcast uri", "Multicast URI for Autodiscovery: ADVERTISE, SEARCHGW and GWINFO (udp://225.4.5.6:5000)") do |v|
+    options[:broadcast_uri] = v
+  end
+  opts.on("-q", "--qos level", "QoS level -1,0,1 or 2. (0)") do |v|
     options[:qos] = v.to_i
   end
   opts.on("-i", "--id id", "This client's id -- free choice (hostname-pid)") do |name|
     options[:id] = name
   end
-  opts.on("-t", "--topic topic", "Topic to subscribe (test/message/123)") do |topic|
+  options[:topic] = "#"
+  opts.on("-t", "--topic topic", "Topic to Subscribe (#)") do |topic|
     options[:topic] = topic
   end
   opts.on("-h", "--http port", "Http port for debug/status JSON server (false)") do |v|
     options[:http_port] = v.to_i
   end
-  opts.on("-k", "--keepalive dur", "Keepalive timer, in seconds. Will ping with this interval. (25)") do |topic|
+  opts.on("-k", "--keepalive dur", "Keepalive timer, in seconds. Will ping Server with this interval. (25)") do |topic|
     options[:keepalive] = topic
   end
 end.parse!
@@ -77,24 +82,8 @@ end
 
 puts "MQTT-SN-SUB: #{options.to_json}"
 begin
-  loop do
-    puts "Connecting.."
-    $sn.connect options[:id] do |cs,cm|
-      puts "connect result: #{cs} #{cm}"
-      if cs==:ok 
-        puts "Subscribing.."
-        $sn.subscribe options[:topic]||"test/message/123", qos: options[:qos] do |s,m|
-          if s==:sub_ack
-            puts "Subscribed Ok! Waiting for Messages!"
-          elsif s==:disconnect
-            puts "Disconnected -- switch to new gateway"
-          else
-            puts "Got Message: #{s}: #{m}"
-          end
-        end
-      end
-    end
-    puts "Disconnected..."
+  $sn.sub options do |status,msg|
+    $sn.note "Got Message '#{msg[:msg]}' with Topic '#{msg[:topic]}'"
   end
 rescue SystemExit, Interrupt
   puts "\nExiting after Disconnect\n"

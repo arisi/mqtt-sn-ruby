@@ -28,6 +28,10 @@ OptionParser.new do |opts|
   opts.on("-s", "--server uri", "URI of the MQTT-SN Server to connect to (udp://localhost:1883)") do |v|
     options[:server_uri] = v
   end
+  options[:broadcast_uri] = "udp://225.4.5.6:5000"
+  opts.on("-b", "--broadcast uri", "Multicast URI for ADVERTISE, SEARCHGW and GWINFO (udp://225.4.5.6:5000)") do |v|
+    options[:broadcast_uri] = v
+  end
   opts.on("-l", "--localport port", "MQTT-SN local port to listen (1882)") do |v|
     options[:local_port] = v.to_i
   end 
