@@ -9,7 +9,7 @@ It will be full-fledged CLI and API for MQTT-SN, all in Ruby.
 
 You can use it for testing, and for building gateways from packet radio ... or CAN, or whatever.
 
-You can use our mqtt-sn-server at udp://mqtt.f:1882 for tests!
+You can use our mqtt-sn-server at udp://mqtt.fi:1882 for tests!
 
 Supported Features:
 - QoS -1,0,1,2
