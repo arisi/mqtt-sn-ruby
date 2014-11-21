@@ -21,6 +21,7 @@ New Features:
 - Keepalive ping 
 - Http server at Publish & Forwarder utils. Allows JSON-status queries.
 - Supports 2-character short topics, detected automatically
+- Supports QoS -1
 
 First install the gem:
 

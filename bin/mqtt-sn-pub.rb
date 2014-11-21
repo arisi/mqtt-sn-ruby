@@ -44,14 +44,19 @@ puts "MQTT-SN-PUB: #{options.to_json}"
 begin
   sn=MqttSN.new options
   sent=false
-  while not sent
-    sn.connect options[:id] do |s,m|
-      if s==:ok
-        sn.publish options[:topic]||"test/message/123", options[:msg]||"test_value", qos: options[:qos]
-        puts "Sent ok."
-        sent=true
-      else
-        sn.disconnect
+  if options[:qos]==-1
+    sn.publish options[:topic]||"XX", options[:msg]||"test_value", qos: options[:qos]
+    puts "Sent."
+  else
+    while not sent
+      sn.connect options[:id] do |s,m|
+        if s==:ok
+          sn.publish options[:topic]||"test/message/123", options[:msg]||"test_value", qos: options[:qos]
+          puts "Sent ok."
+          sent=true
+        else
+          sn.disconnect
+        end
       end
     end
   end

@@ -290,9 +290,10 @@ class MqttSN
 
   def send type,hash={},&block
     #puts ""  if @verbose
-    if @state!=:connected and type!=:connect and type!=:will_topic  and type!=:will_msg  and type!=:searchgw
+    if @state!=:connected and type!=:connect and type!=:will_topic  and type!=:will_msg  and type!=:searchgw 
       if type==:disconnect
         return #already disconnected.. nothing to do
+      elsif type==:publish and hash[:qos]==-1
       else
         note "Error: Cannot #{type} while unconnected, send :connect first!"
         return nil
