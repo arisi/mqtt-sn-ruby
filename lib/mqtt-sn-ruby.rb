@@ -51,12 +51,18 @@ class MqttSN
   QOS2_FLAG  =0x40
   QOS1_FLAG  =0x20
   QOS0_FLAG  =0x00
+  TOPIC_SHORT_FLAG =0x02
 
 
   def logger str,*args
     if @verbose or @debug
-      @log_q << Time.now.iso8601+" "+sprintf(str,*args)
-    end
+      s=sprintf(str,*args)
+      if not @forwarder
+        @log_q << sprintf("%s: (%3.3s) | %s",Time.now.iso8601,@active_gw_id,s)
+      else
+        @log_q << sprintf("%s: [%3.3s] | %s",Time.now.iso8601,@options[:gw_id],s)
+      end
+     end
   end
 
   def note str,*args
@@ -139,10 +145,10 @@ class MqttSN
       @will_topic=nil
       @will_msg=nil
       @active_gw_id=nil
-      @id="?"
 
       @sem=Mutex.new 
       @gsem=Mutex.new 
+      @log_q = Queue.new #log queue :) 
       @msg_id=1
       @clients={}
       @gateways={}
@@ -159,7 +165,6 @@ class MqttSN
         @autodiscovery=true
       end
 
-      @log_q = Queue.new #log queue :) 
 
       @log_t=Thread.new do
         log_thread
@@ -289,13 +294,14 @@ class MqttSN
       if type==:disconnect
         return #already disconnected.. nothing to do
       else
-        raise "Error: Cannot #{type} while unconnected, send :connect first!"
+        note "Error: Cannot #{type} while unconnected, send :connect first!"
+        return nil
       end
     end
     case type
     when :connect
       if not hash[:id]
-        hash[:id]="xxx"
+        hash[:id]="mqtt-sn-ruby-#{$$}"
       end
       flags=0 
       flags+=CLEAN_FLAG if hash[:clean]
@@ -370,6 +376,7 @@ class MqttSN
       @msg_id+=1
 
     when :publish
+      puts "topic id: #{hash[:topic_id]}"
       raise "Need :topic_id to Publish!" if not hash[:topic_id]
       qos=hash[:qos]||0
       flags=0 
@@ -378,6 +385,9 @@ class MqttSN
         flags+=QOSM1_FLAG
       else
         flags+=QOS1_FLAG*qos 
+      end
+      if hash[:topic_type]==:short
+        flags+=TOPIC_SHORT_FLAG
       end
       p=[PUBLISH_TYPE,flags,hash[:topic_id] >>8 ,hash[:topic_id] & 0xff,@msg_id >>8 ,@msg_id & 0xff]
       hash[:msg].each_byte do |b|
@@ -409,7 +419,6 @@ class MqttSN
       else
         raw=send_packet_gw p
       end
-      hash[:debug]=raw if @debug
       return
     end
     @sem.synchronize do #one command at a time -- 
@@ -453,6 +462,11 @@ class MqttSN
             #need to set DUP flag !
           end
         end
+        if status==:timeout
+          note "Warn: ack timeouted, assume disconnected"
+          @state=:disconnect
+          gateway_close :timeout
+        end
       end
     end #sem
     if block
@@ -491,11 +505,26 @@ class MqttSN
   def send_packet_gw m
     msg=MqttSN::build_packet m
     waits=0
-    while not @active_gw_id or not @gateways[@active_gw_id] or not @gateways[@active_gw_id][:socket] 
-      sleep 0.1
-      waits+=1
-      break if waits>30
-    end
+    debug={}
+    debug[:debug]=MqttSN::hexdump(msg) if @debug
+
+    if not @active_gw_id or not @gateways[@active_gw_id] or not @gateways[@active_gw_id][:socket] 
+      print "No active gw, wait ."
+      while not @active_gw_id or not @gateways[@active_gw_id] or not @gateways[@active_gw_id][:socket] 
+        ret="-"
+        if  not ret=pick_new_gateway
+          sleep 0.5
+          print "."
+        end
+        waits+=1
+        if waits>30
+          puts "\nNone Found -- not sending"
+          return
+        end
+      end
+      puts " Ok!"  
+    end  
+
     if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] 
       #get server & port from uri!
       uri=URI.parse(@gateways[@active_gw_id][:uri])
@@ -503,7 +532,7 @@ class MqttSN
       MqttSN::send_raw_packet msg,@gateways[@active_gw_id][:socket],uri.host,uri.port
       _,port,_,_ = @gateways[@active_gw_id][:socket].addr
       src="udp://0.0.0.0:#{port}"
-      logger "od %-24.24s <- %-24.24s | %s",@gateways[@active_gw_id][:uri],src,MqttSN::parse_message(msg).to_json
+      logger "od %-24.24s <- %-24.24s | %s",@gateways[@active_gw_id][:uri],src,MqttSN::parse_message(msg).merge(debug).to_json
     else
       puts "no gw to send.."
       sleep 1
@@ -596,7 +625,9 @@ class MqttSN
     send :subscribe, topic: topic, qos: hash[:qos],expect: :sub_ack do |s,m|
       if s==:ok
         if m[:topic_id] and m[:topic_id]>0 #when subs topic has no wild cards, we get topic id here:
-          @topics[topic]=m[:topic_id]
+          if m[:topic_type]==:long
+            @topics[topic]=m[:topic_id]
+          end
         end
       end
       if block
@@ -609,6 +640,7 @@ class MqttSN
           sleep 0.1
           if @state!=:connected
             block.call :disconnect,{}
+            #gateway_close :subscribe_disconnected
             break
           end
         end
@@ -643,17 +675,24 @@ class MqttSN
   end
 
   def publish topic,msg,hash={}
-    if not @topics[topic]
-      register_topic topic
+    topic_type=:long
+    if topic.size!=2
+      if not @topics[topic]
+        register_topic topic
+      end
+      topic_id=@topics[topic]
+    else
+      topic_id=((topic[0].ord&0xff)<<8)+(topic[1].ord&0xff)
+      topic_type=:short
     end
     case hash[:qos]
     when 1
-      send :publish,msg: msg, retain: hash[:retain], topic_id: @topics[topic], qos: 1, expect: [:publish_ack] do |s,m|
+      send :publish,msg: msg, retain: hash[:retain], topic_id: topic_id, topic_type: topic_type, qos: 1, expect: [:publish_ack] do |s,m|
         if s==:ok
         end
       end
     when 2
-      send :publish,msg: msg, retain: hash[:retain], topic_id: @topics[topic], qos: 2, expect: [:pubrec] do |s,m|
+      send :publish,msg: msg, retain: hash[:retain], topic_id: topic_id, topic_type: topic_type, qos: 2, expect: [:pubrec] do |s,m|
         if s==:ok
           if m[:type]==:pubrec
             send :pubrel,msg_id: m[:msg_id], expect: :pubcomp do |s,m|
@@ -662,7 +701,7 @@ class MqttSN
         end
       end
     else
-      send :publish,msg: msg, retain: hash[:retain],topic_id: @topics[topic], qos: 0
+      send :publish,msg: msg, retain: hash[:retain],topic_id: topic_id, topic_type: topic_type, qos: hash[:qos]||0
     end
   end
 
@@ -696,7 +735,7 @@ class MqttSN
       msg_id=(r[5].ord<<8)+r[6].ord
       m={type: :sub_ack, topic_id: topic_id, msg_id: msg_id, status: status}
     when SUBSCRIBE_TYPE
-      msg_id=(r[5].ord<<8)+r[6].ord
+      msg_id=(r[3].ord<<8)+r[4].ord
       topic=r[5,len-5]
       m={type: :subscribe, flags: r[2].ord, topic: topic, msg_id: msg_id, status: :ok}
     when UNSUBACK_TYPE
@@ -707,8 +746,15 @@ class MqttSN
       msg_id=(r[5].ord<<8)+r[6].ord
       msg=r[7,len-7]
       flags=r[2].ord
+      topic_type=:long
+      topic=""
+      if flags&0x03==TOPIC_SHORT_FLAG
+        topic_type=:short
+        topic=r[3].chr+r[4].chr
+      end
       qos=(flags>>5)&0x03
-      m={type: :publish, qos: qos, topic_id: topic_id,msg_id: msg_id, msg: msg,status: :ok}
+      qos=-1 if qos==3
+      m={type: :publish, qos: qos, topic_id: topic_id, topic_type:topic_type, topic: topic, msg_id: msg_id, msg: msg,status: :ok}
     when PUBREL_TYPE
       msg_id=(r[2].ord<<8)+r[3].ord
       m={type: :pub_rel, msg_id: msg_id, status: :ok}
@@ -779,8 +825,10 @@ class MqttSN
         done=true
       end
     when :publish
-      m[:topic]=@topics.key(m[:topic_id])
-
+      if m[:topic_type]==:long
+        puts "on pitkä #{m[:topic_id]} ->#{@topics.key(m[:topic_id])}"
+        m[:topic]=@topics.key(m[:topic_id])
+      end
       if not @transfer
         @dataq<<m
         if m[:qos]==1 
@@ -928,6 +976,7 @@ class MqttSN
       puts "Error: receive thread died: #{e}"
       pp e.backtrace
     end
+    return @active_gw_id
   end
 
   def roam_thread socket
@@ -955,7 +1004,7 @@ class MqttSN
         while true do
           if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket]
           else # not so ok -- pick one!
-            pick_new_gateway 
+            #pick_new_gateway 
           end
           sleep 0.01
         end

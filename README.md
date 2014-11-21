@@ -20,6 +20,7 @@ New Features:
 - Verbose log now with timestamp and correct ports et al.
 - Keepalive ping 
 - Http server at Publish & Forwarder utils. Allows JSON-status queries.
+- Supports 2-character short topics, detected automatically
 
 First install the gem:
 

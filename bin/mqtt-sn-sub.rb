@@ -86,8 +86,10 @@ begin
         $sn.subscribe options[:topic]||"test/message/123", qos: options[:qos] do |s,m|
           if s==:sub_ack
             puts "Subscribed Ok! Waiting for Messages!"
+          elsif s==:disconnect
+            puts "Disconnected -- switch to new gateway"
           else
-            puts "Got Message: #{m}"
+            puts "Got Message: #{s}: #{m}"
           end
         end
       end
@@ -98,6 +100,7 @@ rescue SystemExit, Interrupt
   puts "\nExiting after Disconnect\n"
 rescue => e
   puts "\nError: '#{e}' -- Quit after Disconnect\n"
+  pp e.backtrace
 end
 $sn.disconnect if $sn
 
