@@ -3,26 +3,29 @@ mqtt-sn-ruby
 
 A simple Ruby gem for MQTT-SN, compatible with RSMB, minimal depenencies (=no gems), with command line tools and API
 
-Still in very early phases, check the test.rb for current usage.
+Still in very early phases, but fully functional.
 
-But soon, it will be full-fledged CLI and API for MQTT-SN, all in Ruby.
+It will be full-fledged CLI and API for MQTT-SN, all in Ruby.
 
 You can use it for testing, and for building gateways from packet radio ... or CAN, or whatever.
 
+You can use our mqtt-sn-server at udp://mqtt.f:1882 for tests!
+
 Supported Features:
-- QoS 0,1,2
+- QoS -1,0,1,2
 - LWT (Last Will and Testament)
 - Transparent forwarder -- from UDP to UDP 
 - ADVERTISE, SEARCHGW and GWINFO autodiscovery
-
-New Features:
 - Multicast on UDP to emulate radio network broadcast, you can leave gateway unspecified -- it will be discovered!
 - Verbose log now with timestamp and correct ports et al.
 - Keepalive ping 
 - Http server at Publish & Forwarder utils. Allows JSON-status queries.
 - Supports 2-character short topics, detected automatically
-- Supports QoS -1
-- Predefined Topics (although RSMB does not yet(?) support them), To use predefined, set topic as "=123"
+- Supports Predefined Topics (although RSMB does not yet(?) support them), To use predefined, set topic as "=123"
+
+New Features:
+- example send.rb and recv.rb
+- free test broker available at mqtt.fi sockets 1882 and 1883 -- feel free to test!
 
 First install the gem:
 
@@ -35,10 +38,9 @@ and for a simple publish:
 ```ruby
 require 'mqtt-sn-ruby'
 
-sn=MqttSN.new debug: true
-sn.connect "mynode"
-sn.publish "sensors/room1/floor","{value: 123}",qos: 0
-sn.disconnect
+sn=MqttSN.new server_uri: "udp://mqtt.fi:1882"
+sn.pub msg: "testing"
+sn.disconnect 
 ```
 
 and for a simple subscibe:
@@ -46,12 +48,10 @@ and for a simple subscibe:
 ```ruby
 require 'mqtt-sn-ruby'
 
-sn=MqttSN.new debug: true
-sn.connect "mynode2"
-sn.subscribe "sensors/+/floor",qos:2 do |status,message|
-  puts "Measurement: #{status},#{message.to_json}"
+sn=MqttSN.new server_uri: "udp://mqtt.fi:1882"
+sn.sub  do |status,msg|
+  sn.note "Got Message '#{msg[:msg]}' with Topic '#{msg[:topic]}'"
 end
-sn.disconnect
 ```
 gem also provides some command line utilities:
 (Multicast UDP is used to emulate radio network's broadcast.)
