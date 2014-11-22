@@ -32,7 +32,7 @@ First install the gem:
 ```asciidoc
 $ gem install mqtt-sn-ruby
 ```
-#Quick test
+##Quick test
 
 For a simple publish: (using free mqtt-sn server)
 
@@ -153,15 +153,27 @@ You can easily check the packets as they flow back and forth between client and 
 
 ##RSMB Installation notes:
 
+First get the sources from http://git.eclipse.org/c/mosquitto/org.eclipse.mosquitto.rsmb.git/
+
 To enable mqtt-sn, you must define MQTTS in the gcc compile command: 
-```
--DMQTTS
-```
+``` asciidoc
+git clone git://git.eclipse.org/gitroot/mosquitto/org.eclipse.mosquitto.rsmb.git
+cd org.eclipse.mosquitto.rsmb/rsmb/src
+make
+echo listener 1883 INADDR_ANY mqtts >mqtt-sn.conf
+./broker_mqtts mqtt_sn.conf
 
-And specify this line in the RSMB config file:
+20141122 123828.692 CWNAN9999I Really Small Message Broker
+20141122 123828.692 CWNAN9998I Part of Project Mosquitto in Eclipse
+(http://projects.eclipse.org/projects/technology.mosquitto)
+20141122 123828.692 CWNAN0049I Configuration file name is mqtt-sn.conf
+20141122 123828.692 CWNAN0053I Version 1.3.0.2, Nov 22 2014 12:37:37
+20141122 123828.692 CWNAN0054I Features included: bridge MQTTS 
+20141122 123828.692 CWNAN9993I Authors: Ian Craggs (icraggs@uk.ibm.com), Nicholas O'Leary
+20141122 123828.692 CWNAN0300I MQTT-S protocol starting, listening on port 1883
+.....
 
 ```
-listener 1883 INADDR_ANY mqtts
-```
+And you have your own broker up and running!
 
 
