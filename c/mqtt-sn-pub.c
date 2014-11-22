@@ -27,7 +27,7 @@ int main(int argc, char**argv)
 {
    if (argc != 5)
    {
-      printf("usage: pub Ip Port Topic Msg \n");
+      printf("usage: mqtt-sn-pub Ip Port Topic Msg \n");
       exit(1);
    }
    MqttSN_open_socket(argv[1],atoi(argv[2]));

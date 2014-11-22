@@ -1,0 +1,1 @@
+gcc mqtt-sn.c mqtt-sn-pub.c -o mqtt-sn-pub

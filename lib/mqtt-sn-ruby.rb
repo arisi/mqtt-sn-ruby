@@ -13,7 +13,7 @@ class MqttSN
 
   Nretry = 3  # Max retry
   Tretry = 3 # Timeout before retry 
-  
+
   SEARCHGW_TYPE  =0x01
   GWINFO_TYPE    =0x02
   ADVERTISE_TYPE =0x03
@@ -627,8 +627,14 @@ class MqttSN
     send :disconnect, duration: duration, expect: :disconnect do |status,message|
     end
   end
+
+  ##
+  # Mid-level function to send Subscription to Broker, if code block is provided, it will run the block when new messages are received.
+  # When subsciption is established with Broker, a :sub_ack message is given to code block.
+  # Incoming messages are indicated with :got_data status.
+  # If connection to Broker is disrupted, a :disconnect message is given.!
   
-  def subscribe topic,hash={},&block
+  def subscribe topic,hash={},&block  # :yields: status, message
     send :subscribe, topic: topic, qos: hash[:qos],expect: :sub_ack do |s,m|
       if s==:ok
         if m[:topic_id] and m[:topic_id]>0 #when subs topic has no wild cards, we get topic id here:
