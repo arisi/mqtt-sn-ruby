@@ -1,17 +1,14 @@
-mqtt-sn-ruby
-============
+#mqtt-sn-ruby
 
 A simple Ruby gem for MQTT-SN, compatible with RSMB, minimal depenencies (=no gems), with command line tools and API
 
-Still in very early phases, but fully functional.
-
-It will be full-fledged CLI and API for MQTT-SN, all in Ruby.
+This gem has full-fledged CLI and API for MQTT-SN, all in Ruby.
 
 You can use it for testing, and for building gateways from packet radio ... or CAN, or whatever.
 
-You can use our mqtt-sn-server at udp://mqtt.fi:1882 for tests!
+You can use our free and open mqtt-sn-server at udp://mqtt.fi:1882 for tests!
 
-Supported Features:
+##Supported Features:
 - QoS -1,0,1,2
 - LWT (Last Will and Testament)
 - Transparent forwarder -- from UDP to UDP 
@@ -23,19 +20,21 @@ Supported Features:
 - Supports 2-character short topics, detected automatically
 - Supports Predefined Topics (although RSMB does not yet(?) support them), To use predefined, set topic as "=123"
 
-New Features:
-- example send.rb and recv.rb
+##New Features:
+- example send.rb and recv.rb
 - free test broker available at mqtt.fi sockets 1882 and 1883 -- feel free to test!
 - Minimal c client lib and demo pub in c-subdir
 
+##Installation
 
 First install the gem:
 
-```shell
+```asciidoc
 $ gem install mqtt-sn-ruby
 ```
+#Quick test
 
-and for a simple publish:
+For a simple publish: (using free mqtt-sn server)
 
 ```ruby
 require 'mqtt-sn-ruby'
@@ -45,7 +44,7 @@ sn.pub msg: "testing"
 sn.disconnect 
 ```
 
-and for a simple subscibe:
+and for a simple subscribe: (using free mqtt-sn server)
 
 ```ruby
 require 'mqtt-sn-ruby'
@@ -55,11 +54,12 @@ sn.sub  do |status,msg|
   sn.note "Got Message '#{msg[:msg]}' with Topic '#{msg[:topic]}'"
 end
 ```
-gem also provides some command line utilities:
+This gem also provides some command line utilities:
+
 (Multicast UDP is used to emulate radio network's broadcast.)
 
 - Publish utility, use this to subscribe messages.
-```shell
+```asciidoc
 $ mqtt-sn-pub.rb 
 
 Usage: mqtt-sn-sub.rb [options]
@@ -71,9 +71,26 @@ Usage: mqtt-sn-sub.rb [options]
     -m, --msg msg          Message to send (test_value)
     -t, --topic topic      Topic to subscribe (test/message/123)
 ```
+Sample run:
+``` asciidoc
+$ mqtt-sn-pub.rb -t pe -m hello_world -q 1 --server udp://mqtt.fi:1882 -v
+
+2014-11-22T12:13:59+02:00: Using Default Gateway: udp://mqtt.fi:1882
+2014-11-22T12:13:59+02:00: Opening Gateway 0: udp://mqtt.fi:1882
+2014-11-22T12:13:59+02:00: MQTT-SN-PUB: {"topic":"pe","msg":"hello_world","qos":1,"server_uri":"udp://mqtt.fi:1882","verbose":true}
+2014-11-22T12:13:59+02:00: Connecting as 'mqtt-sn-ruby-11069'
+2014-11-22T12:13:59+02:00: (  0) | od udp://mqtt.fi:1882       <- udp://0.0.0.0:53903      | {"type":"connect","flags":0,"duration":25,"client_id":"mqtt-sn-ruby-11069","status":"ok"}
+2014-11-22T12:13:59+02:00: (  0) | id udp://mqtt.fi:1882       -> udp://0.0.0.0:53903      | {"type":"connect_ack","status":"ok"}
+2014-11-22T12:13:59+02:00: (  0) | od udp://mqtt.fi:1882       <- udp://0.0.0.0:53903      | {"type":"publish","qos":1,"topic_id":28773,"topic_type":"short","topic":"pe","msg_id":1,"msg":"hello_world","status":"ok"}
+2014-11-22T12:13:59+02:00: (  0) | id udp://mqtt.fi:1882       -> udp://0.0.0.0:53903      | {"type":"publish_ack","topic_id":0,"msg_id":1,"status":"ok"}
+Sent ok.
+2014-11-22T12:14:00+02:00: (  0) | od udp://mqtt.fi:1882       <- udp://0.0.0.0:53903      | {"type":"disconnect","status":"ok"}
+2014-11-22T12:14:00+02:00: (  0) | id udp://mqtt.fi:1882       -> udp://0.0.0.0:53903      | {"type":"disconnect","status":"ok"}
+MQTT-SN-PUB Done.
+```
 
 - Subscription utility, use this to subscribe messages. Press Control-C to Quit.
-```shell
+```asciidoc
 $ mqtt-sn-sub.rb 
 
 Usage: mqtt-sn-sub.rb [options]
@@ -84,6 +101,23 @@ Usage: mqtt-sn-sub.rb [options]
     -i, --id id            This client id -- free choice (hostname-pid)
     -t, --topic topic      Topic to subscribe (test/message/123)
     -k, --keepalive dur    Keepalive timer, in seconds. Will ping with this interval. (25)
+
+```
+
+And sample run (without verbose debugging):
+
+``` asciidoc
+$ bin/mqtt-sn-sub.rb  --server udp://mqtt.fi:1882 
+
+2014-11-22T12:16:02+02:00: Using Default Gateway: udp://mqtt.fi:1882
+MQTT-SN-SUB: {"broadcast_uri":"udp://225.4.5.6:5000","topic":"#","server_uri":"udp://mqtt.fi:1882"}
+2014-11-22T12:16:02+02:00: Opening Gateway 0: udp://mqtt.fi:1882
+2014-11-22T12:16:02+02:00: Connecting..
+2014-11-22T12:16:02+02:00: Connecting as 'mqtt-sn-ruby-11109'
+2014-11-22T12:16:02+02:00: connect result: ok {:type=>:connect_ack, :status=>:ok}
+2014-11-22T12:16:02+02:00: Subscribing..
+2014-11-22T12:16:02+02:00: Subscribed Ok! Waiting for Messages!
+2014-11-22T12:16:08+02:00: Got Message 'hello_world' with Topic 'pe'
 
 ```
 
@@ -99,25 +133,35 @@ Usage: mqtt-sn-sub.rb [options]
     -h, --http port        Http port for debug/status JSON server (false)
 ```
 
-Sample log from forwarder:
+Sample forwarder run and log:
 
-```
-C 20.20.20.21:43721  -> 20.20.20.21:38284  | {"type":"register","topic_id":0,"msg_id":1,"topic":"test/uusi","status":"ok"}
-S 20.20.20.21:43721  <- 20.20.20.21:38284  | {"type":"register_ack","topic_id":1,"status":"ok"}
-C 20.20.20.21:43721  -> 20.20.20.21:38284  | {"type":"publish","qos":2,"topic_id":1,"msg_id":2,"msg":"hello!!","status":"ok"}
-S 20.20.20.21:43721  <- 20.20.20.21:38284  | {"type":"pubrec","msg_id":2,"status":"ok"}
-C 20.20.20.21:43721  -> 20.20.20.21:38284  | {"type":"pub_rel","msg_id":2,"status":"ok"}
-S 20.20.20.21:59089  <- 20.20.20.21:46649  | {"type":"register","topic_id":1,"msg_id":1,"topic":"test/uusi","status":"ok"}
-S 20.20.20.21:43721  <- 20.20.20.21:38284  | {"type":"pubcomp","status":"ok","msg_id":2}
-C 20.20.20.21:59089  -> 20.20.20.21:46649  | {"type":"register_ack","topic_id":1,"status":"ok"}
-S 20.20.20.21:59089  <- 20.20.20.21:46649  | {"type":"publish","qos":2,"topic_id":1,"msg_id":2,"msg":"hello!!","status":"ok"}
-C 20.20.20.21:59089  -> 20.20.20.21:46649  | {"type":"pubrec","msg_id":2,"status":"ok"}
-S 20.20.20.21:59089  <- 20.20.20.21:46649  | {"type":"pub_rel","msg_id":2,"status":"ok"}
-C 20.20.20.21:59089  -> 20.20.20.21:46649  | {"type":"pubcomp","status":"ok","msg_id":2}
-C 20.20.20.21:43721  -> 20.20.20.21:38284  | {"type":"disconnect","status":"ok"}
-S 20.20.20.21:43721  <- 20.20.20.21:38284  | {"type":"disconnect","status":"ok"}
+``` asciidoc
+$ mqtt-sn-forwarder.rb -l 1882 -v -d  --server udp://20.20.20.21:1883 -i 56
+
+2014-11-22T12:16:07+02:00: + 178.251.144.67:48247
+2014-11-22T12:16:07+02:00: [ 56] | cs udp://178.251.144.67:482 -> udp://20.20.20.21:1883   | {"type":"connect","flags":0,"duration":25,"client_id":"mqtt-sn-ruby-11146","status":"ok"}
+2014-11-22T12:16:07+02:00: [ 56] | sc udp://178.251.144.67:482 <- udp://20.20.20.21:1883   | {"type":"connect_ack","status":"ok"}
+2014-11-22T12:16:07+02:00: [ 56] | cs udp://178.251.144.67:482 -> udp://20.20.20.21:1883   | {"type":"publish","qos":1,"topic_id":28773,"topic_type":"short","topic":"pe","msg_id":1,"msg":"hello_world","status":"ok"}
+2014-11-22T12:16:07+02:00: [ 56] | sc udp://178.251.144.67:482 <- udp://20.20.20.21:1883   | {"type":"publish_ack","topic_id":0,"msg_id":1,"status":"ok"}
+2014-11-22T12:16:07+02:00: [ 56] | sc udp://178.251.144.67:378 <- udp://20.20.20.21:1883   | {"type":"publish","qos":0,"topic_id":28773,"topic_type":"short","topic":"pe","msg_id":1,"msg":"hello_world","status":"ok"}
+2014-11-22T12:16:08+02:00: [ 56] | cs udp://178.251.144.67:482 -> udp://20.20.20.21:1883   | {"type":"disconnect","status":"ok"}
+2014-11-22T12:16:08+02:00: [ 56] | sc udp://178.251.144.67:482 <- udp://20.20.20.21:1883   | {"type":"disconnect","status":"ok"}
+2014-11-22T12:16:08+02:00: - 178.251.144.67:48247
 ```
 
-for more up-to-date examples, see the included test.rb
+You can easily check the packets as they flow back and forth between client and broker.
+
+##RSMB Installation notes:
+
+To enable mqtt-sn, you must define MQTTS in the gcc compile command: 
+```
+-DMQTTS
+```
+
+And specify this line in the RSMB config file:
+
+```
+listener 1883 INADDR_ANY mqtts
+```
 
 
