@@ -26,6 +26,8 @@ Supported Features:
 New Features:
 - example send.rb and recv.rb
 - free test broker available at mqtt.fi sockets 1882 and 1883 -- feel free to test!
+- Minimal c client lib and demo pub in c-subdir
+
 
 First install the gem:
 
