@@ -28,7 +28,7 @@ OptionParser.new do |opts|
   opts.on("-q", "--qos level", "QoS level (0). When using QoS -1, you must provide either Short Topic (2-char) or Topic_Id") do |v|
     options[:qos] = v.to_i
   end
-  opts.on("-i", "--id id", "This client's id -- free choice (hostname-pid)") do |name|
+  opts.on("-i", "--id id", "This client's id -- free choice (mqtt-sn-ruby-pid)") do |name|
     options[:id] = name
   end
   opts.on("-m", "--msg msg", "Message to send (test_value)") do |msg|
@@ -40,8 +40,8 @@ OptionParser.new do |opts|
   
 end.parse!
 
-puts "MQTT-SN-PUB: #{options.to_json}"
 sn=MqttSN.new options
+sn.note "MQTT-SN-PUB: #{options.to_json}"
 begin
   sn.pub options
 rescue SystemExit, Interrupt

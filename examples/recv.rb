@@ -3,7 +3,7 @@
 require 'mqtt-sn-ruby'
 
 begin
-  sn=MqttSN.new server_uri: "udp://mqtt.fi:1882"
+  sn=MqttSN.new server_uri: "udp://mqtt.fi:1882", verbose: true
   sn.sub  do |status,msg|
     sn.note "Got Message '#{msg[:msg]}' with Topic '#{msg[:topic]}'"
   end

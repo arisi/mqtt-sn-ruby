@@ -128,10 +128,8 @@ class MqttSN
     s
   end
 
-
   attr_accessor :clients
   attr_accessor :gateways
-
 
   def initialize(hash={})
       @options=hash #save these
@@ -156,14 +154,14 @@ class MqttSN
       @broadcast_uri=hash[:broadcast_uri]
 
       if @server_uri
-        puts "Using Default Gateway: #{@server_uri}"
+        note "Using Default Gateway: #{@server_uri}"
         @gateways[0]={stamp: Time.now.to_i,uri: @server_uri, duration: 0, source: 'default', status: :ok}
         pick_new_gateway 
       elsif @broadcast_uri
-        puts "Autodiscovery Active, using #{@broadcast_uri}"
+        note "Autodiscovery Active, using #{@broadcast_uri}"
         @autodiscovery=true
       else
-        puts "No autodiscovery and no Default Gateway -- cannot proceed"
+        note "No autodiscovery and no Default Gateway -- cannot proceed"
         exit -1
       end
 
@@ -186,7 +184,7 @@ class MqttSN
       end
       if @forwarder
         @s,@server,@port = MqttSN::open_port @server_uri
-        puts "Open port to Gateway: #{@server_uri}: #{@server},#{@port} -- Listening local port: #{@local_port}"
+        note "Open port to Gateway: #{@server_uri}: #{@server},#{@port} -- Listening local port: #{@local_port}"
         @local_port=hash[:local_port]||1883
         @s.bind("0.0.0.0",@local_port)
         @bcast_period=60
@@ -311,9 +309,10 @@ class MqttSN
     end
     case type
     when :connect
-      if not hash[:id]
+      if not hash[:id] or hash[:id]=""
         hash[:id]="mqtt-sn-ruby-#{$$}"
       end
+      note "Connecting as '#{hash[:id]}'"
       flags=0 
       flags+=CLEAN_FLAG if hash[:clean]
       flags+=RETAIN_FLAG if hash[:retain]
@@ -1048,7 +1047,6 @@ class MqttSN
 
 #toplevel funcs:
   def pub options={}
-    pp options
     sent=false
     if options[:qos]==-1
       publish options[:topic]||"XX", options[:msg]||"test_value", qos: options[:qos]
