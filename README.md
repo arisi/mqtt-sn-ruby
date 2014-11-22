@@ -155,7 +155,8 @@ You can easily check the packets as they flow back and forth between client and 
 
 First get the sources from http://git.eclipse.org/c/mosquitto/org.eclipse.mosquitto.rsmb.git/
 
-To enable mqtt-sn, you must define MQTTS in the gcc compile command: 
+To compile and run, you can:
+
 ``` asciidoc
 git clone git://git.eclipse.org/gitroot/mosquitto/org.eclipse.mosquitto.rsmb.git
 cd org.eclipse.mosquitto.rsmb/rsmb/src
