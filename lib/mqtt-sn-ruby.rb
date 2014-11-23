@@ -130,13 +130,28 @@ class MqttSN
 
   attr_accessor :clients
   attr_accessor :gateways
+  attr_accessor :state
+  attr_accessor :active_gw_id
+
+  def add_gateway gw_id,hash
+    if not @gateways[gw_id]
+       @gateways[gw_id]={stamp: Time.now.to_i, status: :ok, last_use: 0,last_ping: 0,counter_send:0, last_send: 0,counter_recv:0, last_recv: 0}.merge(hash)
+    else
+      if @gateways[gw_id][:uri]!=hash[:uri]
+        note "conflict -- gateway has moved? or duplicate"
+      else
+        @gateways[gw_id][:stamp]=Time.now.to_i
+        @gateways[gw_id]=@gateways[gw_id].merge hash
+      end
+    end
+  end
 
   def initialize(hash={})
       @options=hash #save these
       @server_uri=hash[:server_uri]
       @debug=hash[:debug]
       @verbose=hash[:verbose]
-      @state=:inited
+      @state=:disconnected
       @bcast_port=5000
       @keepalive=(hash[:keepalive]||25).to_i
       @forwarder=hash[:forwarder] #flag to indicate forward mode 
@@ -155,13 +170,13 @@ class MqttSN
 
       if @server_uri
         note "Using Default Gateway: #{@server_uri}"
-        @gateways[0]={stamp: Time.now.to_i,uri: @server_uri, duration: 0, source: 'default', status: :ok}
+        add_gateway(0,{uri: @server_uri,source: "default"})
         pick_new_gateway 
       elsif @broadcast_uri
         note "Autodiscovery Active, using #{@broadcast_uri}"
         @autodiscovery=true
       else
-        note "No autodiscovery and no Default Gateway -- cannot proceed"
+        puts "No autodiscovery and no Default Gateway -- cannot proceed"
         exit -1
       end
 
@@ -298,7 +313,7 @@ class MqttSN
 
   def send type,hash={},&block
     #puts ""  if @verbose
-    if @state!=:connected and type!=:connect and type!=:will_topic  and type!=:will_msg  and type!=:searchgw 
+    if @state==:disconnected and type!=:connect and type!=:will_topic  and type!=:will_msg  and type!=:searchgw 
       if type==:disconnect
         return #already disconnected.. nothing to do
       elsif type==:publish and hash[:qos]==-1
@@ -534,17 +549,22 @@ class MqttSN
         end
       end
       note "Gw Ok!"  
-    end  
-
-    if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] 
-      #get server & port from uri!
-      uri=URI.parse(@gateways[@active_gw_id][:uri])
-      #uri.scheme
-      MqttSN::send_raw_packet msg,@gateways[@active_gw_id][:socket],uri.host,uri.port
-      _,port,_,_ = @gateways[@active_gw_id][:socket].addr
-      src="udp://0.0.0.0:#{port}"
-      logger "od %-24.24s <- %-24.24s | %s",@gateways[@active_gw_id][:uri],src,MqttSN::parse_message(msg).merge(debug).to_json
-    else
+    end
+    ok=false  
+    @gsem.synchronize do
+      if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] 
+        ok=true
+        @gateways[@active_gw_id][:last_send]=Time.now.to_i
+        @gateways[@active_gw_id][:counter_send]+=1
+        uri=URI.parse(@gateways[@active_gw_id][:uri])
+        #uri.scheme
+        MqttSN::send_raw_packet msg,@gateways[@active_gw_id][:socket],uri.host,uri.port
+        _,port,_,_ = @gateways[@active_gw_id][:socket].addr
+        src="udp://0.0.0.0:#{port}"
+        logger "od %-24.24s <- %-24.24s | %s",@gateways[@active_gw_id][:uri],src,MqttSN::parse_message(msg).merge(debug).to_json
+      end
+    end
+    if not ok
       puts "no gw to send.."
       sleep 1
     end
@@ -575,7 +595,7 @@ class MqttSN
   end
   
   def will_and_testament topic,msg
-    if @state==:connected #if already connected, send changes, otherwise wait until connect does it.
+    if @state!=:disconnected #if already connected, send changes, otherwise wait until connect does it.
       if @will_topic!=topic
         send :will_topic_upd, topic: topic, expect: :will_topic_resp do |status,message|
           puts "will topic updated"
@@ -651,7 +671,7 @@ class MqttSN
             block.call :got_data,m
           end
           sleep 0.1
-          if @state!=:connected
+          if @state==:disconnected
             block.call :disconnect,{}
             #gateway_close :subscribe_disconnected
             break
@@ -859,6 +879,14 @@ class MqttSN
       end
     when :connect_ack
       @state=:connected
+    when :sub_ack
+      @state=:subscribed
+    when :pong
+      @gsem.synchronize do #one command at a time -- 
+        if @active_gw_id and @gateways[@active_gw_id] 
+          @gateways[@active_gw_id][:last_ping]=Time.now.to_i
+        end
+      end
     when :searchgw
       done=true
     when :advertise
@@ -877,7 +905,7 @@ class MqttSN
     Thread.new do #ping thread
       while true do
         begin
-          while @state!=:connected 
+          while @state==:disconnected 
             sleep 1
           end
           sleep @keepalive
@@ -900,21 +928,24 @@ class MqttSN
     Thread.new do #work thread
       while true do
         begin
-          if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] #if we are connected...
-            if pac=MqttSN::poll_packet(@gateways[@active_gw_id][:socket]) #cannot block -- gateway may change...
-              r,client_ip,client_port=pac 
-              m=MqttSN::parse_message r
-              if @debug and m
-                m[:debug]=MqttSN::hexdump r
+          do_sleep=true
+            if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] #if we are connected...
+              if pac=MqttSN::poll_packet(@gateways[@active_gw_id][:socket]) #cannot block -- gateway may change...
+                r,client_ip,client_port=pac 
+                m=MqttSN::parse_message r
+                if @debug and m
+                  m[:debug]=MqttSN::hexdump r
+                end
+                _,port,_,_= @gateways[@active_gw_id][:socket].addr
+                src="udp://0.0.0.0:#{port}"
+                logger "id %-24.24s -> %-24.24s | %s",@gateways[@active_gw_id][:uri],src,m.to_json
+                process_message m
+                do_sleep=false
+                @gateways[@active_gw_id][:last_recv]=Time.now.to_i
+                @gateways[@active_gw_id][:counter_recv]+=1
               end
-              _,port,_,_= @gateways[@active_gw_id][:socket].addr
-              src="udp://0.0.0.0:#{port}"
-              logger "id %-24.24s -> %-24.24s | %s",@gateways[@active_gw_id][:uri],src,m.to_json
-              process_message m
-            else
-              sleep 0.01
             end
-          else
+          if do_sleep
             sleep 0.01
           end
         rescue => e
@@ -937,17 +968,7 @@ class MqttSN
       gw_id=m[:gw_id]  
       duration=m[:duration]||180
       uri="udp://#{client_ip}:1882"
-      if not @gateways[gw_id]
-         @gateways[gw_id]={stamp: Time.now.to_i,uri: uri, duration: duration, source: m[:type], status: :ok, last_use: 0}
-      else
-        if @gateways[gw_id][:uri]!=uri
-          note "conflict -- gateway has moved? or duplicate"
-        else
-          @gateways[gw_id][:stamp]=Time.now.to_i
-          @gateways[gw_id][:duration]=duration 
-          @gateways[gw_id][:source]=m[:type] 
-        end
-      end
+      add_gateway(gw_id,{uri: uri, source: m[:type], duration:duration,stamp: Time.now.to_i})
     end
   end
 

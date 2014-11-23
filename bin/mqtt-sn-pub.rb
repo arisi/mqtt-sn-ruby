@@ -25,6 +25,10 @@ OptionParser.new do |opts|
   opts.on("-s", "--server uri", "URI of the MQTT-SN Server to connect to. Example udp://localhost:1883. Default: Use Autodiscovery.") do |v|
     options[:server_uri] = v
   end
+  options[:broadcast_uri] = "udp://225.4.5.6:5000"
+  opts.on("-b", "--[no-]broadcast uri", "Multicast URI for Autodiscovery: ADVERTISE, SEARCHGW and GWINFO (udp://225.4.5.6:5000)") do |v|
+    options[:broadcast_uri] = v
+  end
   opts.on("-q", "--qos level", "QoS level (0). When using QoS -1, you must provide either Short Topic (2-char) or Topic_Id") do |v|
     options[:qos] = v.to_i
   end
@@ -46,10 +50,12 @@ begin
   sn.pub options
 rescue SystemExit, Interrupt
   puts "\nExiting after Disconnect\n"
-rescue => e
+rescue Exception => e
   puts "\nError: '#{e}' -- Quit after Disconnect\n"
   e.backtrace
 end
-sn.disconnect if sn
+sn.disconnect if sn 
+
+sn.log_flush
 
 puts "MQTT-SN-PUB Done."

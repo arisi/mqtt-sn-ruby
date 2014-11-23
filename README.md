@@ -19,11 +19,18 @@ You can use our free and open mqtt-sn-server at udp://mqtt.fi:1882 for tests!
 - Http server at Publish & Forwarder utils. Allows JSON-status queries.
 - Supports 2-character short topics, detected automatically
 - Supports Predefined Topics (although RSMB does not yet(?) support them), To use predefined, set topic as "=123"
-
-##New Features:
 - example send.rb and recv.rb
 - free test broker available at mqtt.fi sockets 1882 and 1883 -- feel free to test!
 - Minimal c client lib and demo pub in c-subdir
+
+
+##New Features:
+- Initial web server showing gateway statistics for subscribe utility, with SSE and raw sockets ;) 
+
+##Features in near future:
+- enhanced web services, more statistics
+- web page for gateway too, with packet trace and debug dump
+- support for packet radio via FM <--> UDP server
 
 ##Installation
 

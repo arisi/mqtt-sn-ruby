@@ -5,6 +5,7 @@ require "pp"
 require 'socket'
 require 'json'
 require 'optparse'
+
 if File.file? './lib/mqtt-sn-ruby.rb'
   require './lib/mqtt-sn-ruby.rb'
   puts "using local lib"
@@ -12,9 +13,9 @@ else
   require 'mqtt-sn-ruby'
 end
 
-options = {}
+options = {app_name: "mqtt-sn-sub"}
 OptionParser.new do |opts|
-  opts.banner = "Usage: mqtt-sn-sub.rb [options]"
+  opts.banner = "Usage: #{options[:app_name]}.rb [options]"
 
   opts.on("-v", "--[no-]verbose", "Run verbosely; creates protocol log on console (false)") do |v|
     options[:verbose] = v
@@ -50,34 +51,13 @@ end.parse!
 $sn=MqttSN.new options
 
 if options[:http_port]
-  puts "Starting HTTP services at port #{options[:http_port]}"
-  $hp=options[:http_port]
-  Thread.new do
-    server = TCPServer.new("20.20.20.21",$hp)
-    loop do
-      Thread.start(server.accept) do |client|
-        request = client.gets.split " "
-        type="text/html"
-        case request[1]
-        when '/gw'
-          response=$sn.gateways.to_json
-          status="200 OK"
-          type="text/json"
-        else
-          status="404 Not Found"
-          response="?que"
-        end
-        client.print "HTTP/1.1 #{status}\r\n" +
-               "Content-Type: #{type}\r\n" +
-               "Content-Length: #{response.bytesize}\r\n" +
-               "Connection: close\r\n"
-        client.print "\r\n"
-        client.print response 
-        client.close
-        puts "#{request} -> #{response}"
-      end
-    end
+  if File.file? './lib/mqtt-sn-ruby.rb'
+    require './lib/mqtt-sn-http.rb'
+    puts "using local http lib"
+  else
+    require 'mqtt-sn-http'
   end
+  http_server options
 end
 
 puts "MQTT-SN-SUB: #{options.to_json}"

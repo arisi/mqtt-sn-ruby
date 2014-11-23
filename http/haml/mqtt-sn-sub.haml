@@ -1,0 +1,30 @@
+%html{lang: "fi"}
+  %head
+    %title MQTT-SN-RUBY Subscribe Utility
+    %meta{:charset => "utf-8"}/
+    %link{:href => "/mqtt-sn.css", :rel => "stylesheet", :type => "text/css"}
+    %script{:src => "https://code.jquery.com/jquery-2.1.1.min.js"}
+    %script{:src => "/mqtt-sn.js"}
+    %script{:src => "/mqtt-sn-sub.js"}
+  %body
+    %h1 MQTT-SN-SUB Subscriber Utility
+    %p
+      State:
+      %span.state 
+        ?
+      , Current GW:
+      %span.active_gw_id 
+        ?
+    %hr
+    %p Gateways:
+    %p.data datat tähän
+    %hr
+    %p Clients:
+    %p.data datat tähän
+    %hr
+    %p
+      %font{size: "-1"}
+        Written by
+        %a{href: "mailto:jalopuuverstas@gmail.com"}
+          Ari Siitonen 
+        2014 
