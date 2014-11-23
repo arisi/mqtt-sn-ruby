@@ -259,6 +259,7 @@ class MqttSN
           @clients[key]={ip:client_ip, port:client_port, socket: UDPSocket.new, uri: uri, state: :active, counter_send:0, last_send:0 , counter_recv:0, last_recv:0}
           c=@clients[key]
           puts "thread start for #{key}"
+
           @clients[key][:thread]=Thread.new(key) do |my_key|
             while true
               pacc=MqttSN::poll_packet_block(@clients[my_key][:socket]) #if we get data from server destined to our client
