@@ -6,6 +6,7 @@ require "coffee-script"
 
 def http_server options
   prev_t={}
+  #@http_log=[]
   puts "Starting HTTP services at port #{options[:http_port]}"
   if File.directory? './http'
     $http_dir="http/"
@@ -15,6 +16,8 @@ def http_server options
 
   Thread.new(options[:http_port],options[:app_name]) do |http_port,http_app|
     server = TCPServer.new("0.0.0.0",http_port)
+    @http_sessions={}
+    http_session_counter=1
     loop do
       Thread.start(server.accept) do |client|
         begin
@@ -55,7 +58,7 @@ def http_server options
             end
             if type!="text/event-stream" and status=="200 OK"
               begin
-                type,response=eval "json_#{act} request"
+                type,response=eval "json_#{act} request,0,0"  #event handlers get called with zero session => init :)
                 response=response.to_json
               rescue => e
                 puts "**** AJAX EXEC #{fn} failed:  #{e}"
@@ -81,13 +84,18 @@ def http_server options
             client.print response 
           else
             client.print "Expires: -1\r\n"
-            #client.print "\r\n"
-            cnt=0
+            client.print "\r\n"
             begin
+              my_session=client.peeraddr[1]
+              if not @http_sessions[my_session]
+                #puts "**************** new port #{my_session}"
+                @http_sessions[my_session]={client_port:client.peeraddr[1],client_ip:client.peeraddr[2] , log_position:0 }
+              end
+              my_event=0
               loop do
                 begin
-                  type,response=eval "json_#{act} request"
-                  cnt+=1
+                  type,response=eval "json_#{act} request,my_session,my_event"
+                  my_event+=1
                 rescue => e
                   puts "**** AJAX EXEC #{fn} failed:  #{e}"
                   puts "#{e.backtrace[0..2]}"
@@ -100,10 +108,11 @@ def http_server options
                   client.print  "data: #{response.to_json}\n\n"
                 end
                 sleep 1
-                break if cnt>10 
+                break if my_event>100
               end
             rescue => e
               puts "stream #{client} died #{e}"
+              pp e.backtrace
             end
 
           end

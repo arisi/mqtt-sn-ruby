@@ -54,19 +54,28 @@ class MqttSN
 
 
   def logger str,*args
+    s=sprintf(str,*args)
+    if not @forwarder
+      text=sprintf("%s: (%3.3s) | %s",Time.now.iso8601,@active_gw_id,s)
+    else
+      text=sprintf("%s: [%3.3s] | %s",Time.now.iso8601,@options[:gw_id],s)
+    end
     if @verbose or @debug
-      s=sprintf(str,*args)
-      if not @forwarder
-        @log_q << sprintf("%s: (%3.3s) | %s",Time.now.iso8601,@active_gw_id,s)
-      else
-        @log_q << sprintf("%s: [%3.3s] | %s",Time.now.iso8601,@options[:gw_id],s)
-      end
-     end
+      @log_q << text
+    end
+    if @options[:http_port] and @http_log
+      @http_log << {stamp: Time.now.to_i, text: text}
+    end
   end
 
   def note str,*args
     s=sprintf(str,*args)
-    @log_q << sprintf("%s: %s",Time.now.iso8601,s)
+    text=sprintf("%s: %s",Time.now.iso8601,s)
+    @log_q << text
+    if @options[:http_port] and @http_log
+      @http_log << {stamp: Time.now.to_i, text: text}
+    end
+ 
   end
 
   def log_empty?
@@ -131,7 +140,9 @@ class MqttSN
   attr_accessor :clients
   attr_accessor :gateways
   attr_accessor :state
+  attr_accessor :options
   attr_accessor :active_gw_id
+  attr_accessor :http_log
 
   def add_gateway gw_id,hash
     if not @gateways[gw_id]
@@ -158,6 +169,7 @@ class MqttSN
       @will_topic=nil
       @will_msg=nil
       @active_gw_id=nil
+      @http_log=[]
 
       @sem=Mutex.new 
       @gsem=Mutex.new 

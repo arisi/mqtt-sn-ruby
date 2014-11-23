@@ -25,11 +25,9 @@ You can use our free and open mqtt-sn-server at udp://mqtt.fi:1882 for tests!
 
 
 ##New Features:
-- Initial web server showing gateway statistics for subscribe utility, with SSE and raw sockets ;) 
+- Web server: statistics,status and protocol trace log for subscribe & forwarder utility, with SSE and raw sockets ;) 
 
 ##Features in near future:
-- enhanced web services, more statistics
-- web page for gateway too, with packet trace and debug dump
 - support for packet radio via FM <--> UDP server
 
 ##Installation

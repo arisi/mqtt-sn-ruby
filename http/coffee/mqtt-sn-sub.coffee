@@ -2,7 +2,9 @@
 now=0
 
 update_status = (data) ->
-  #console.log data
+  console.log data.jes
+  console.log data.loglines
+  #console.log data.logpos
   now=data.now
   html="<table><tr><th>gw_id</th><th>uri</th><th>source</th><th>stamp</th><th>last_use</th><th>last_ping</th><th>last_send</th><th>counter_send</th><th>last_recv</th><th>counter_recv</th></tr>"
   for k,v of data.gateways
@@ -36,13 +38,16 @@ update_status = (data) ->
       html+="<td></td>"
     html+="<td>#{v.counter_recv}</td>"
     html+="</tr>"
-
+  if data.jes[1]==0
+    $(".log").html("")
+  for l in data.loglines
+    #console.log l
+    $(".log").prepend(l.text+"\n")  
   html+="</table>"
   #console.log html
   $(".data").html(html)
-  $(".state").html(data.state)
-  $(".active_gw_id").html(data.active_gw_id)
-
+  $(".info").html("State: #{data.state}, gw: #{data.active_gw_id}, app: #{data.options.app_name}, ")
+  
 
 xxx = () ->
   $.ajax

@@ -14,14 +14,15 @@ else
   require 'mqtt-sn-ruby'
 end
 
-options = {forwarder: true}
+options = {forwarder: true,app_name: "mqtt-sn-forwarder"}
 OptionParser.new do |opts|
   opts.banner = "Usage: mqtt-sn-sub.rb [options]"
 
-  opts.on("-v", "--[no-]verbose", "Run verbosely (false)") do |v|
+ 
+  opts.on("-v", "--[no-]verbose", "Run verbosely; creates protocol log on console (false)") do |v|
     options[:verbose] = v
   end
-  opts.on("-d", "--[no-]debug", "Produce Debug dump on console (false)") do |v|
+  opts.on("-d", "--[no-]debug", "Produce Debug dump on verbose log (false)") do |v|
     options[:debug] = v
   end
   options[:server_uri] = "udp://localhost:1883"
@@ -46,38 +47,13 @@ end.parse!
 
 $sn=MqttSN.new options
 if options[:http_port]
-  puts "Starting HTTP services at port #{options[:http_port]}"
-  $hp=options[:http_port]
-  Thread.new do
-    server = TCPServer.new("20.20.20.21",$hp)
-    loop do
-      Thread.start(server.accept) do |client|
-        request = client.gets.split " "
-        type="text/html"
-        case request[1]
-        when '/gw'
-          response=$sn.gateways.to_json
-          status="200 OK"
-          type="text/json"
-        when '/cli'
-          response=$sn.clients.to_json
-          status="200 OK"
-          type="text/json"
-        else
-          status="404 Not Found"
-          response="?que"
-        end
-        client.print "HTTP/1.1 #{status}\r\n" +
-               "Content-Type: #{type}\r\n" +
-               "Content-Length: #{response.bytesize}\r\n" +
-               "Connection: close\r\n"
-        client.print "\r\n"
-        client.print response 
-        client.close
-        puts "#{request} -> #{response}"
-      end
-    end
+  if File.file? './lib/mqtt-sn-ruby.rb'
+    require './lib/mqtt-sn-http.rb'
+    puts "using local http lib"
+  else
+    require 'mqtt-sn-http'
   end
+  http_server options
 end
 
 puts "MQTT-SN-FORWARDER: #{options.to_json}"
