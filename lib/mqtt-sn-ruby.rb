@@ -69,13 +69,17 @@ class MqttSN
   end
 
   def note str,*args
-    s=sprintf(str,*args)
-    text=sprintf("%s: %s",Time.now.iso8601,s)
-    @log_q << text
-    if @options[:http_port] and @http_log
-      @http_log << {stamp: Time.now.to_i, text: text}
+    begin
+      s=sprintf(str,*args)
+      text=sprintf("%s: %s",Time.now.iso8601,s)
+      @log_q << text
+      if @options[:http_port] and @http_log
+        @http_log << {stamp: Time.now.to_i, text: text}
+      end
+    rescue => e
+      pp e.backtrace
+      puts "note dies: #{e} '#{str}'"
     end
- 
   end
 
   def log_empty?
@@ -170,6 +174,8 @@ class MqttSN
       @will_msg=nil
       @active_gw_id=nil
       @http_log=[]
+      @local_ifs=Socket.getifaddrs.map { |i| i.addr.ip_address if i.addr.ipv4? }.compact
+
 
       @sem=Mutex.new 
       @gsem=Mutex.new 
@@ -211,8 +217,8 @@ class MqttSN
       end
       if @forwarder
         @s,@server,@port = MqttSN::open_port @server_uri
-        note "Open port to Gateway: #{@server_uri}: #{@server},#{@port} -- Listening local port: #{@local_port}"
-        @local_port=hash[:local_port]||1883
+        @local_port=hash[:local_port]||1882
+        note "Open port to Gateway: #{@server_uri}: #{@server},#{@port} -- Listening local port: #{@local_port} @ IPs: #{@local_ifs}"
         @s.bind("0.0.0.0",@local_port)
         @bcast_period=60
       else
@@ -283,10 +289,14 @@ class MqttSN
         sbytes=@clients[key][:socket].send(r, 0, @server, @port) # to rsmb -- ok as is
         _,port,_,_ = @clients[key][:socket].addr
         dest="#{@server}:#{port}"
-        if @active_gw_id
-          logger "cs %-24.24s -> %-24.24s | %s", @clients[key][:uri],@gateways[@active_gw_id][:uri],m.to_json
-        else
-          logger "cs %-24.24s -> %-24.24s | %s", @clients[key][:uri],"??",m.to_json
+        begin 
+          if @active_gw_id
+            logger "cs %-24.24s -> %-24.24s | %s", @clients[key][:uri],@gateways[@active_gw_id][:uri],m.to_json
+          else
+            logger "cs %-24.24s -> %-24.24s | %s", @clients[key][:uri],"??",m.to_json
+          end
+        rescue Exception =>e
+          puts "logging fails #{e}"
         end
        end
     end
@@ -324,7 +334,6 @@ class MqttSN
   end
 
   def send type,hash={},&block
-    #puts ""  if @verbose
     if @state==:disconnected and type!=:connect and type!=:will_topic  and type!=:will_msg  and type!=:searchgw 
       if type==:disconnect
         return #already disconnected.. nothing to do
@@ -429,7 +438,7 @@ class MqttSN
       end
       p=[PUBLISH_TYPE,flags,hash[:topic_id] >>8 ,hash[:topic_id] & 0xff,@msg_id >>8 ,@msg_id & 0xff]
       hash[:msg].each_byte do |b|
-        p<<b
+        p<<b.ord
       end
       @msg_id+=1
     when :pubrel 
@@ -573,7 +582,7 @@ class MqttSN
         MqttSN::send_raw_packet msg,@gateways[@active_gw_id][:socket],uri.host,uri.port
         _,port,_,_ = @gateways[@active_gw_id][:socket].addr
         src="udp://0.0.0.0:#{port}"
-        logger "od %-24.24s <- %-24.24s | %s",@gateways[@active_gw_id][:uri],src,MqttSN::parse_message(msg).merge(debug).to_json
+        logger "od %-24.24s <- %-24.24s | %s",@gateways[@active_gw_id][:uri],src,MqttSN::parse_message(msg).merge(debug).to_json  ###utf-8
       end
     end
     if not ok
@@ -793,7 +802,7 @@ class MqttSN
     when PUBLISH_TYPE
       topic_id=(r[3].ord<<8)+r[4].ord
       msg_id=(r[5].ord<<8)+r[6].ord
-      msg=r[7,len-7]
+      msg=r[7,len-7].force_encoding("UTF-8")
       flags=r[2].ord
       topic_type=:long
       topic=""

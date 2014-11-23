@@ -25,7 +25,9 @@ You can use our free and open mqtt-sn-server at udp://mqtt.fi:1882 for tests!
 
 
 ##New Features:
-- Web server: statistics,status and protocol trace log for subscribe & forwarder utility, with SSE and raw sockets ;) 
+- Web server: statistics,status and protocol trace log for subscribe & forwarder utility, with SSE and raw sockets ;)
+- UTF-8 support
+- Publish via web form @ mqtt-sn-sub.rb's http page 
 
 ##Features in near future:
 - support for packet radio via FM <--> UDP server
@@ -37,6 +39,10 @@ First install the gem:
 ```asciidoc
 $ gem install mqtt-sn-ruby
 ```
+NOTE: If you wish to use http services, please install following gems:
+- haml
+- coffee-script
+
 ##Quick test
 
 For a simple publish: (using free mqtt-sn server)

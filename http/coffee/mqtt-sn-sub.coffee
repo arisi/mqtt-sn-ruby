@@ -49,17 +49,20 @@ update_status = (data) ->
   $(".info").html("State: #{data.state}, gw: #{data.active_gw_id}, app: #{data.options.app_name}, ")
   
 
-xxx = () ->
+@ajax = (obj) ->
+  console.log "doin ajax"
+  form=$(obj).closest("form")
+  key=form.attr('id')
+  q=$( form ).serialize()
+  console.log q
   $.ajax
-    url: "/gateways.json"
+    url: "/action.json?#{q}"
     type: "GET"
-    data: "123"
     processData: false
     contentType: false
     success: (data) ->
       console.log "ajax returns: ", data
-      $(".data").html(html)
-
+      
       return
     error: (xhr, ajaxOptions, thrownError) ->
       alert thrownError

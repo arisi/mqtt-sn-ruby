@@ -9,6 +9,18 @@
   %body
     %h1 MQTT-SN-SUB Subscriber Utility
     %p.info ?
+    %form{ onsubmit: "ajax(this); return(false);"}
+      Msg:
+      %input{name: "msg", size: 20}
+      Topic:
+      %input{name: "topic", size: 10}
+      QoS:
+      %select.qos{name: "qos"}
+        %option{value: "0"} 0
+        %option{value: "1"} 1
+        %option{value: "2"} 2
+      %button{value: "Publish", onclick: "ajax(this); return(false);"}
+        Publish
     %hr
     %p Gateways:
     %p.data 

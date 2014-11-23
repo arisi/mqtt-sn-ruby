@@ -7,7 +7,8 @@ require "coffee-script"
 def http_server options
   prev_t={}
   #@http_log=[]
-  puts "Starting HTTP services at port #{options[:http_port]}"
+  ports=Socket.getifaddrs.map { |i| i.addr.ip_address if i.addr.ipv4? }.compact
+  puts "Starting HTTP services at port #{options[:http_port]}, server IPs: #{ports}"
   if File.directory? './http'
     $http_dir="http/"
   else
@@ -26,8 +27,18 @@ def http_server options
           type="text/html"
           req=request[1]
           req="/#{http_app}.html" if req=="/" or req=="/index.htm" or req=="/index.html"
-          req,args=req.split "\?"
-          #puts "req: #{req}"
+          req,argss=req.split "\?"
+          puts "req: #{req}, agss:#{argss}"
+          args={}
+          if argss
+            argss.split("&").each do |a|
+              if a
+                k,v=URI.decode(a).force_encoding("UTF-8").split "="
+                args[k]=v
+              end
+            end
+          end
+          puts "req: #{req}, args:#{args}"
           if req[/\.html$/] and File.file?(fn="#{$http_dir}haml#{req.gsub('.html','.haml')}")
             contents = File.read(fn)
             response=Haml::Engine.new(contents).render
@@ -57,16 +68,17 @@ def http_server options
               end
             end
             if type!="text/event-stream" and status=="200 OK"
+              puts  "json_#{act} request,args,0,0   '#{req},#{args}'" 
               begin
-                type,response=eval "json_#{act} request,0,0"  #event handlers get called with zero session => init :)
-                response=response.to_json
+                type,response=eval "json_#{act} req,args,0,0"  #event handlers get called with zero session => init :)
               rescue => e
                 puts "**** AJAX EXEC #{fn} failed:  #{e}"
                 pp e.backtrace
                 response=[{act: :error, msg:"Error executing JSON",alert: "Syntax error '#{e}' in '#{fn}'"}].to_json
                 type="text/json"
               end
-            end
+              response=response.to_json
+             end
           elsif req[/\.css$/] and File.file?(fnc="#{$http_dir}css#{req}")
             type="text/css"
             contents = File.read(fnc)
@@ -94,7 +106,7 @@ def http_server options
               my_event=0
               loop do
                 begin
-                  type,response=eval "json_#{act} request,my_session,my_event"
+                  type,response=eval "json_#{act} request,args,my_session,my_event"
                   my_event+=1
                 rescue => e
                   puts "**** AJAX EXEC #{fn} failed:  #{e}"
