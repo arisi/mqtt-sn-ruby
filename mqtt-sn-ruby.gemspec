@@ -7,6 +7,7 @@ Gem::Specification.new do |s|
   s.authors     = ["Ari Siitonen"]
   s.email       = 'jalopuuverstas@gmail.com'
   s.files       = ["lib/mqtt-sn-ruby.rb","lib/mqtt-sn-http.rb", "examples/send.rb", "examples/recv.rb","c/mqtt-sn.c","c/mqtt-sn.h","c/mqtt-sn-pub.c"]
+  s.files      += Dir['http/**/*']
   s.executables << 'mqtt-sn-pub.rb'
   s.executables << 'mqtt-sn-sub.rb'
   s.executables << 'mqtt-sn-forwarder.rb'

@@ -7,7 +7,11 @@ require "coffee-script"
 def http_server options
   prev_t={}
   puts "Starting HTTP services at port #{options[:http_port]}"
-  $http_dir="http/"
+  if File.directory? './http'
+    $http_dir="http/"
+  else
+    $http_dir = File.join( Gem.loaded_specs['mqtt-sn-ruby'].full_gem_path, 'http/')
+  end
 
   Thread.new(options[:http_port],options[:app_name]) do |http_port,http_app|
     server = TCPServer.new("0.0.0.0",http_port)
