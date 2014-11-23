@@ -28,7 +28,7 @@ def http_server options
           req=request[1]
           req="/#{http_app}.html" if req=="/" or req=="/index.htm" or req=="/index.html"
           req,argss=req.split "\?"
-          puts "req: #{req}, agss:#{argss}"
+          #puts "req: #{req}, agss:#{argss}"
           args={}
           if argss
             argss.split("&").each do |a|
@@ -38,7 +38,7 @@ def http_server options
               end
             end
           end
-          puts "req: #{req}, args:#{args}"
+          #puts "req: #{req}, args:#{args}"
           if req[/\.html$/] and File.file?(fn="#{$http_dir}haml#{req.gsub('.html','.haml')}")
             contents = File.read(fn)
             response=Haml::Engine.new(contents).render
@@ -68,7 +68,6 @@ def http_server options
               end
             end
             if type!="text/event-stream" and status=="200 OK"
-              puts  "json_#{act} request,args,0,0   '#{req},#{args}'" 
               begin
                 type,response=eval "json_#{act} req,args,0,0"  #event handlers get called with zero session => init :)
               rescue => e

@@ -1,5 +1,7 @@
 #mqtt-sn-ruby
 
+[![Gem Version](https://badge.fury.io/rb/mqtt-sn-ruby.svg)](http://badge.fury.io/rb/mqtt-sn-ruby)
+
 A simple Ruby gem for MQTT-SN, compatible with RSMB, minimal depenencies (=no gems), with command line tools and API
 
 This gem has full-fledged CLI and API for MQTT-SN, all in Ruby.
