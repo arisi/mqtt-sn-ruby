@@ -19,6 +19,8 @@
         %option{value: "0"} 0
         %option{value: "1"} 1
         %option{value: "2"} 2
+      Retain:
+      %input{type: :checkbox,name: "retain", value: "true"}
       %button{value: "Publish", onclick: "ajax(this); return(false);"}
         Publish
     %hr

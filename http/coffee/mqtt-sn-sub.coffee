@@ -3,9 +3,35 @@ now=0
 
 update_status = (data) ->
   console.log data.jes
-  console.log data.loglines
+  console.log data.clients
   #console.log data.logpos
   now=data.now
+  html="<table><tr><th>uri</th><th>state</th><th>stamp</th><th>last_send</th><th>counter_send</th><th>last_recv</th><th>counter_recv</th></tr>"
+  for k,v of data.clients
+    html+="<tr>"
+    html+="<td>#{k}</td>"
+    html+="<td>#{v.state}</td>"
+    html+="<td>#{now-v.stamp}</td>"
+
+
+
+    if v.last_send
+      html+="<td>#{now-v.last_send}</td>"
+    else
+      html+="<td></td>"
+    html+="<td>#{v.counter_send}</td>"
+
+    if v.last_recv
+      html+="<td>#{now-v.last_recv}</td>"
+    else
+      html+="<td></td>"
+    html+="<td>#{v.counter_recv}</td>"
+
+    html+="</tr>"
+  html+="</table>"
+  #console.log html
+  $(".clients").html(html)
+    
   html="<table><tr><th>gw_id</th><th>uri</th><th>source</th><th>stamp</th><th>last_use</th><th>last_ping</th><th>last_send</th><th>counter_send</th><th>last_recv</th><th>counter_recv</th></tr>"
   for k,v of data.gateways
     k=parseInt(k,10)

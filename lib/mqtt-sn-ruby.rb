@@ -256,7 +256,7 @@ class MqttSN
         key="#{client_ip}:#{client_port}"
         if not @clients[key]
           uri="udp://#{client_ip}:#{client_port}"
-          @clients[key]={ip:client_ip, port:client_port, socket: UDPSocket.new, uri: uri, state: :active  }
+          @clients[key]={ip:client_ip, port:client_port, socket: UDPSocket.new, uri: uri, state: :active, counter_send:0, last_send:0 , counter_recv:0, last_recv:0}
           c=@clients[key]
           puts "thread start for #{key}"
           @clients[key][:thread]=Thread.new(key) do |my_key|
@@ -268,6 +268,11 @@ class MqttSN
               _,port,_,_ = @clients[my_key][:socket].addr
               dest="#{@server}:#{port}"
               logger "sc %-24.24s <- %-24.24s | %s",@clients[my_key][:uri],@gateways[@active_gw_id][:uri],mm.to_json
+              @gateways[@active_gw_id][:last_recv]=Time.now.to_i
+              @gateways[@active_gw_id][:counter_recv]+=1
+              @clients[my_key][:last_send]=Time.now.to_i
+              @clients[my_key][:counter_send]+=1
+
               case mm[:type]
               when :disconnect
                 @clients[my_key][:state]=:disconnected
@@ -289,6 +294,10 @@ class MqttSN
         sbytes=@clients[key][:socket].send(r, 0, @server, @port) # to rsmb -- ok as is
         _,port,_,_ = @clients[key][:socket].addr
         dest="#{@server}:#{port}"
+        @gateways[@active_gw_id][:last_send]=Time.now.to_i
+        @gateways[@active_gw_id][:counter_send]+=1
+        @clients[key][:last_recv]=Time.now.to_i
+        @clients[key][:counter_recv]+=1
         begin 
           if @active_gw_id
             logger "cs %-24.24s -> %-24.24s | %s", @clients[key][:uri],@gateways[@active_gw_id][:uri],m.to_json
@@ -815,7 +824,8 @@ class MqttSN
       end
       qos=(flags>>5)&0x03
       qos=-1 if qos==3
-      m={type: :publish, qos: qos, topic_id: topic_id, topic_type:topic_type, topic: topic, msg_id: msg_id, msg: msg,status: :ok}
+      m={type: :publish, qos: qos, topic_id: topic_id, topic_type:topic_type, topic: topic, msg_id: msg_id, msg: msg,flags: flags, status: :ok}
+      m[:retain]=true if flags & RETAIN_FLAG == RETAIN_FLAG        
     when PUBREL_TYPE
       msg_id=(r[2].ord<<8)+r[3].ord
       m={type: :pub_rel, msg_id: msg_id, status: :ok}

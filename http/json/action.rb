@@ -8,7 +8,14 @@ def json_action request,args,session,event
   msg=args['msg']||"test_message"
   topic=args['topic']||"XX"
   qos=(args['qos']||0).to_i
-  $sn.publish topic, msg, qos: qos
+  if args['retain']=="true"
+    retain=true
+  else
+    retail=nil
+  end
+  pp args
+  pp retain
+  $sn.publish topic, msg, qos: qos, retain: retain
   data={jee: 123}
   return ["text/json",data]
 end

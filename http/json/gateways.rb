@@ -23,6 +23,7 @@ def json_gateways request,args,session,event
     now:Time.now.to_i,
     jes: [session,event],
     gateways: $sn.gateways,
+    clients: $sn.clients,
     state: $sn.state,
     active_gw_id: $sn.active_gw_id,
     options: $sn.options, 

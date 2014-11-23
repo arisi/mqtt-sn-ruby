@@ -24,12 +24,13 @@ You can use our free and open mqtt-sn-server at udp://mqtt.fi:1882 for tests!
 - example send.rb and recv.rb
 - free test broker available at mqtt.fi sockets 1882 and 1883 -- feel free to test!
 - Minimal c client lib and demo pub in c-subdir
-
-
-##New Features:
 - Web server: statistics,status and protocol trace log for subscribe & forwarder utility, with SSE and raw sockets ;)
 - UTF-8 support
 - Publish via web form @ mqtt-sn-sub.rb's http page 
+
+
+##New Features:
+- Forwarder http page has now Client list and statistics
 
 ##Features in near future:
 - support for packet radio via FM <--> UDP server
