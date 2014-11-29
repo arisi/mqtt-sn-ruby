@@ -780,15 +780,8 @@ class MqttSN
 
   def self.parse_message r
     m=nil
-    if not r[0]
-      puts "Malformed empty packet #{r}"
-      return {}
-    end
     len=r[0].ord
-    if len!= r.size
-      puts "Malformed packet #{r}"
-      return {}
-    end
+    if 
     case r[len-1].ord
     when 0x00
       status=:ok
@@ -955,7 +948,7 @@ class MqttSN
           end
           sleep @keepalive
           if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] #if we are connected...
-            send :ping, timeout: 5,expect: :pong do |status,message|
+            send :ping, timeout: 2,expect: :pong do |status,message|
               if status!=:ok
                 note "Error:#{@id} no pong! -- sending disconnect to app"
                 @state=:disconnected

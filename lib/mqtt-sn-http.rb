@@ -5,10 +5,15 @@ require "haml"
 require "coffee-script"
 
 def http_server options
+  
   prev_t={}
-  #@http_log=[]
-  ports=Socket.getifaddrs.map { |i| i.addr.ip_address if i.addr.ipv4? }.compact
-  puts "Starting HTTP services at port #{options[:http_port]}, server IPs: #{ports}"
+  ports=['127.0.0.1']
+  if Socket.method_defined? :getifaddrs
+    ports=Socket.getifaddrs.map { |i| i.addr.ip_address if i.addr.ipv4? }.compact
+    puts "Starting HTTP services at port #{options[:http_port]}, server IPs: #{ports}"
+  else
+    puts "Starting HTTP services at port #{options[:http_port]}."
+  end
   if File.directory? './http'
     $http_dir="http/"
   else
