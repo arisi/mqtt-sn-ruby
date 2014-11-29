@@ -4,6 +4,7 @@
 *.rbc
 *.log
 .DS_Store
+#*
 *~
 c/mqtt-sn-pub
 .sass-cache/*
