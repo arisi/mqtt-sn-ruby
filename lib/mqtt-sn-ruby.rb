@@ -7,12 +7,14 @@ require 'json'
 require 'uri'
 require 'ipaddr'
 require 'time'
+require 'thread'
 
 
 class MqttSN
 
   Nretry = 3  # Max retry
-  Tretry = 3 # Timeout before retry 
+  Tretry = 3 # Timeout before retry
+  MAX_IDLE = 60*3 # Forwarder will disconnect parties after this idle time
 
   SEARCHGW_TYPE  =0x01
   GWINFO_TYPE    =0x02
@@ -92,7 +94,7 @@ class MqttSN
     end
   end
 
-  def log_thread 
+  def log_thread
     while true do
       begin
         if not @log_q.empty?
@@ -122,16 +124,16 @@ class MqttSN
     end
   end
 
-  def open_multicast_send_port 
+  def open_multicast_send_port
     uri = URI.parse(@broadcast_uri)
-      
+
     ip =  IPAddr.new(uri.host).hton + IPAddr.new("0.0.0.0").hton
     socket_b = UDPSocket.new
     socket_b.setsockopt(Socket::IPPROTO_IP, Socket::IP_TTL, [1].pack('i'))
     socket_b
   end
 
-  def open_multicast_recv_port  
+  def open_multicast_recv_port
     uri = URI.parse(@broadcast_uri)
     ip =  IPAddr.new(uri.host).hton + IPAddr.new("0.0.0.0").hton
     s = UDPSocket.new
@@ -174,7 +176,7 @@ class MqttSN
       @state=:disconnected
       @bcast_port=5000
       @keepalive=(hash[:keepalive]||25).to_i
-      @forwarder=hash[:forwarder] #flag to indicate forward mode 
+      @forwarder=hash[:forwarder] #flag to indicate forward mode
       @will_topic=nil
       @will_msg=nil
       @active_gw_id=nil
@@ -182,9 +184,9 @@ class MqttSN
       @local_ifs=Socket.getifaddrs.map { |i| i.addr.ip_address if i.addr.ipv4? }.compact
 
 
-      @sem=Mutex.new 
-      @gsem=Mutex.new 
-      @log_q = Queue.new #log queue :) 
+      @sem=Mutex.new
+      @gsem=Mutex.new
+      @log_q = Queue.new #log queue :)
       @msg_id=1
       @clients={}
       @gateways={}
@@ -194,7 +196,7 @@ class MqttSN
       if @server_uri
         note "Using Default Gateway: #{@server_uri}"
         add_gateway(0,{uri: @server_uri,source: "default"})
-        pick_new_gateway 
+        pick_new_gateway
       elsif @broadcast_uri
         note "Autodiscovery Active, using #{@broadcast_uri}"
         @autodiscovery=true
@@ -211,10 +213,10 @@ class MqttSN
       @topics={} #hash of registered topics is stored here
       @iq = Queue.new
       @dataq = Queue.new
-      
+
       if @broadcast_uri
         @bcast_s=open_multicast_send_port
-        @bcast=open_multicast_recv_port 
+        @bcast=open_multicast_recv_port
 
         @roam_t=Thread.new do
           roam_thread @bcast
@@ -227,25 +229,32 @@ class MqttSN
         @s.bind("0.0.0.0",@local_port)
         @bcast_period=60
       else
-        client_thread 
+        client_thread
       end
   end
 
   def forwarder_thread
-    if not @forwarder 
+    if not @forwarder
       raise "Cannot Forward if no Forwarder!"
     end
-    begin 
+    begin
       last_kill=0
       stime=Time.now.to_i
       Thread.new do #maintenance
-        while true do 
+        while true do
           sleep 1
+          now=Time.now.to_i
           changes=false
           @clients.dup.each do |key,data|
             if data[:state]==:disconnected
               dest="#{data[:ip]}:#{data[:port]}"
               note "- %s",dest
+              @clients.delete key
+              changes=true
+            elsif data[:last_send]<now-MAX_IDLE and data[:last_recv]<now-MAX_IDLE
+              dest="#{data[:ip]}:#{data[:port]}"
+              note "-- %s",dest
+              kill_client key
               @clients.delete key
               changes=true
             end
@@ -304,7 +313,7 @@ class MqttSN
         @gateways[@active_gw_id][:counter_send]+=1
         @clients[key][:last_recv]=Time.now.to_i
         @clients[key][:counter_recv]+=1
-        begin 
+        begin
           if @active_gw_id
             logger "cs %-24.24s -> %-24.24s | %s", @clients[key][:uri],@gateways[@active_gw_id][:uri],m.to_json
           else
@@ -314,6 +323,15 @@ class MqttSN
           puts "logging fails #{e}"
         end
        end
+    end
+  end
+
+  def kill_client key
+    puts "Killing Client #{key}:"
+    if c=@clients[key]
+      puts "Really Killing #{key}"
+      send_packet [DISCONNECT_TYPE],@s,c[:ip], c[:port]
+      send_packet [DISCONNECT_TYPE],c[:socket], @server,@port
     end
   end
 
@@ -349,7 +367,7 @@ class MqttSN
   end
 
   def send type,hash={},&block
-    if @state==:disconnected and type!=:connect and type!=:will_topic  and type!=:will_msg  and type!=:searchgw 
+    if @state==:disconnected and type!=:connect and type!=:will_topic  and type!=:will_msg  and type!=:searchgw
       if type==:disconnect
         return #already disconnected.. nothing to do
       elsif type==:publish and hash[:qos]==-1
@@ -364,7 +382,7 @@ class MqttSN
         hash[:id]="mqtt-sn-ruby-#{$$}"
       end
       note "Connecting as '#{hash[:id]}'"
-      flags=0 
+      flags=0
       flags+=CLEAN_FLAG if hash[:clean]
       flags+=RETAIN_FLAG if hash[:retain]
       flags+=WILL_FLAG if @will_topic
@@ -373,7 +391,7 @@ class MqttSN
         p<<b
       end
       @id=hash[:id]
-    when :register 
+    when :register
       raise "Need :topic to Publish!" if not hash[:topic]
       p=[REGISTER_TYPE,0,0,@msg_id >>8 ,@msg_id & 0xff]
       hash[:topic].each_byte do |b|
@@ -388,19 +406,19 @@ class MqttSN
       p=[PUBREC_TYPE,hash[:msg_id]>>8 ,hash[:msg_id] & 0xff]
     when :pub_comp
       p=[PUBCOMP_TYPE,hash[:msg_id]>>8 ,hash[:msg_id] & 0xff]
-    when :will_topic 
+    when :will_topic
       raise "Need :topic to :will_topic" if not hash[:topic]
       p=[WILLTOPIC_TYPE,0]
       hash[:topic].each_byte do |b|
         p<<b
       end
-    when :will_topic_upd 
+    when :will_topic_upd
       raise "Need :topic to :will_topic_upd" if not hash[:topic]
       p=[WILLTOPICUPD_TYPE,0]
       hash[:topic].each_byte do |b|
         p<<b
       end
-    when :will_msg 
+    when :will_msg
       raise "Need :msg to :will_msg" if not hash[:msg]
       p=[WILLMSG_TYPE]
       hash[:msg].each_byte do |b|
@@ -413,14 +431,14 @@ class MqttSN
         p<<b
       end
 
-    when :subscribe 
+    when :subscribe
       raise "Need :topic to :subscribe" if not hash[:topic]
       qos=hash[:qos]||0
-      flags=0 
+      flags=0
       if qos==-1
         flags+=QOSM1_FLAG
       else
-        flags+=QOS1_FLAG*qos 
+        flags+=QOS1_FLAG*qos
       end
       p=[SUBSCRIBE_TYPE,flags,@msg_id >>8 ,@msg_id & 0xff]
       hash[:topic].each_byte do |b|
@@ -428,7 +446,7 @@ class MqttSN
       end
       @msg_id+=1
 
-    when :unsubscribe 
+    when :unsubscribe
       raise "Need :topic to :unsubscribe" if not hash[:topic]
       p=[UNSUBSCRIBE_TYPE,0,@msg_id >>8 ,@msg_id & 0xff]
       hash[:topic].each_byte do |b|
@@ -439,12 +457,12 @@ class MqttSN
     when :publish
       raise "Need :topic_id to Publish!" if not hash[:topic_id]
       qos=hash[:qos]||0
-      flags=0 
+      flags=0
       flags+=RETAIN_FLAG if hash[:retain]
       if qos==-1
         flags+=QOSM1_FLAG
       else
-        flags+=QOS1_FLAG*qos 
+        flags+=QOS1_FLAG*qos
       end
       if hash[:topic_type]==:short
         flags+=TOPIC_SHORT_FLAG
@@ -456,7 +474,7 @@ class MqttSN
         p<<b.ord
       end
       @msg_id+=1
-    when :pubrel 
+    when :pubrel
       raise "Need the original :msg_id of the Publish for PubRel!" if not hash[:msg_id]
       p=[PUBREL_TYPE,hash[:msg_id] >>8 ,hash[:msg_id] & 0xff]
     when :ping
@@ -483,7 +501,7 @@ class MqttSN
       end
       return
     end
-    @sem.synchronize do #one command at a time -- 
+    @sem.synchronize do #one command at a time --
       if hash[:expect]
         while not @iq.empty?
           mp=@iq.pop
@@ -570,9 +588,9 @@ class MqttSN
     debug={}
     debug[:debug]=MqttSN::hexdump(msg) if @debug
 
-    if not @active_gw_id or not @gateways[@active_gw_id] or not @gateways[@active_gw_id][:socket] 
+    if not @active_gw_id or not @gateways[@active_gw_id] or not @gateways[@active_gw_id][:socket]
       note "No active gw, wait ."
-      while not @active_gw_id or not @gateways[@active_gw_id] or not @gateways[@active_gw_id][:socket] 
+      while not @active_gw_id or not @gateways[@active_gw_id] or not @gateways[@active_gw_id][:socket]
         ret="-"
         if  not ret=pick_new_gateway
           sleep 0.5
@@ -584,11 +602,11 @@ class MqttSN
           return
         end
       end
-      note "Gw Ok!"  
+      note "Gw Ok!"
     end
-    ok=false  
+    ok=false
     @gsem.synchronize do
-      if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] 
+      if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket]
         ok=true
         @gateways[@active_gw_id][:last_send]=Time.now.to_i
         @gateways[@active_gw_id][:counter_send]+=1
@@ -629,7 +647,7 @@ class MqttSN
     client_port=stuff[1]
     return [r,client_ip,client_port]
   end
-  
+
   def will_and_testament topic,msg
     if @state!=:disconnected #if already connected, send changes, otherwise wait until connect does it.
       if @will_topic!=topic
@@ -661,7 +679,7 @@ class MqttSN
         if m[:type]==:will_topic_req
           send :will_topic, topic: @will_topic, expect: [:will_msg_req] do |s,m| #add will here!
             if s==:ok
-              send :will_msg, msg: @will_msg, expect: [:connect_ack] do |s,m| 
+              send :will_msg, msg: @will_msg, expect: [:connect_ack] do |s,m|
               end
             end
           end
@@ -674,12 +692,12 @@ class MqttSN
     end
   end
 
-  def disconnect 
+  def disconnect
     send :disconnect, expect: :disconnect do |status,message|
     end
   end
 
-  def goto_sleep duration 
+  def goto_sleep duration
     send :disconnect, duration: duration, expect: :disconnect do |status,message|
     end
   end
@@ -689,7 +707,7 @@ class MqttSN
   # When subsciption is established with Broker, a :sub_ack message is given to code block.
   # Incoming messages are indicated with :got_data status.
   # If connection to Broker is disrupted, a :disconnect message is given.!
-  
+
   def subscribe topic,hash={},&block  # :yields: status, message
     send :subscribe, topic: topic, qos: hash[:qos],expect: :sub_ack do |s,m|
       if s==:ok
@@ -839,7 +857,7 @@ class MqttSN
       qos=(flags>>5)&0x03
       qos=-1 if qos==3
       m={type: :publish, qos: qos, topic_id: topic_id, topic_type:topic_type, topic: topic, msg_id: msg_id, msg: msg,flags: flags, status: :ok}
-      m[:retain]=true if flags & RETAIN_FLAG == RETAIN_FLAG        
+      m[:retain]=true if flags & RETAIN_FLAG == RETAIN_FLAG
     when PUBREL_TYPE
       msg_id=(r[2].ord<<8)+r[3].ord
       m={type: :pub_rel, msg_id: msg_id, status: :ok}
@@ -893,7 +911,7 @@ class MqttSN
     m
   end
 
-  def process_message m    
+  def process_message m
     done=false
     case m[:type]
     when :register
@@ -915,9 +933,9 @@ class MqttSN
       end
       if not @transfer
         @dataq<<m
-        if m[:qos]==1 
+        if m[:qos]==1
           send :publish_ack,topic_id: m[:topic_id], msg_id: m[:msg_id], return_code: 0
-        elsif m[:qos]==2 
+        elsif m[:qos]==2
           send :pub_rec, msg_id: m[:msg_id]
         end
         done=true
@@ -927,8 +945,8 @@ class MqttSN
     when :sub_ack
       @state=:subscribed
     when :pong
-      @gsem.synchronize do #one command at a time -- 
-        if @active_gw_id and @gateways[@active_gw_id] 
+      @gsem.synchronize do #one command at a time --
+        if @active_gw_id and @gateways[@active_gw_id]
           @gateways[@active_gw_id][:last_ping]=Time.now.to_i
         end
       end
@@ -946,11 +964,11 @@ class MqttSN
     m
   end
 
-  def client_thread 
+  def client_thread
     Thread.new do #ping thread
       while true do
         begin
-          while @state==:disconnected 
+          while @state==:disconnected
             sleep 1
           end
           sleep @keepalive
@@ -976,7 +994,7 @@ class MqttSN
           do_sleep=true
             if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket] #if we are connected...
               if pac=MqttSN::poll_packet(@gateways[@active_gw_id][:socket]) #cannot block -- gateway may change...
-                r,client_ip,client_port=pac 
+                r,client_ip,client_port=pac
                 m=MqttSN::parse_message r
                 if @debug and m
                   m[:debug]=MqttSN::hexdump r
@@ -1010,7 +1028,7 @@ class MqttSN
         send_packet_bcast [GWINFO_TYPE,@options[:gw_id]]
       end
     when :advertise,:gwinfo
-      gw_id=m[:gw_id]  
+      gw_id=m[:gw_id]
       duration=m[:duration]||180
       uri="udp://#{client_ip}:1882"
       add_gateway(gw_id,{uri: uri, source: m[:type], duration:duration,stamp: Time.now.to_i})
@@ -1019,8 +1037,8 @@ class MqttSN
 
 
   def gateway_close cause
-    @gsem.synchronize do #one command at a time -- 
-    
+    @gsem.synchronize do #one command at a time --
+
       if @active_gw_id # if using one, mark it used, so it will be last reused
         note "Closing gw #{@active_gw_id} cause: #{cause}"
         @gateways[@active_gw_id][:last_use]=Time.now.to_i
@@ -1030,13 +1048,13 @@ class MqttSN
         end
         @active_gw_id=nil
       end
-    end     
+    end
   end
 
-  def pick_new_gateway 
+  def pick_new_gateway
     begin
       gateway_close nil
-      @gsem.synchronize do #one command at a time -- 
+      @gsem.synchronize do #one command at a time --
         pick=nil
         pick_t=0
         @gateways.each do |gw_id,data|
@@ -1089,7 +1107,7 @@ class MqttSN
         while true do
           if @active_gw_id and @gateways[@active_gw_id] and @gateways[@active_gw_id][:socket]
           else # not so ok -- pick one!
-            #pick_new_gateway 
+            #pick_new_gateway
           end
           sleep 0.01
         end
@@ -1097,9 +1115,9 @@ class MqttSN
     end
     while true do
       begin
-        if @bcast 
+        if @bcast
          pac=MqttSN::poll_packet_block(socket)
-          r,client_ip,client_port=pac 
+          r,client_ip,client_port=pac
           m=MqttSN::parse_message r
           if @debug and m
             m[:debug]=MqttSN::hexdump r
@@ -1136,7 +1154,7 @@ class MqttSN
         end
       end
     end
-    log_flush 
+    log_flush
   end
 
   def sub options={},&block
@@ -1144,7 +1162,7 @@ class MqttSN
       note "Connecting.."
       connect options[:id] do |cs,cm|
         note "connect result: #{cs} #{cm}"
-        if cs==:ok 
+        if cs==:ok
           note "Subscribing.."
           subscribe options[:topic]||"test/message/123", qos: options[:qos] do |s,m|
             if s==:sub_ack
