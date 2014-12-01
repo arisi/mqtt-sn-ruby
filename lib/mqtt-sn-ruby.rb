@@ -1031,7 +1031,12 @@ class MqttSN
       gw_id=m[:gw_id]
       duration=m[:duration]||180
       uri="udp://#{client_ip}:1882"
-      add_gateway(gw_id,{uri: uri, source: m[:type], duration:duration,stamp: Time.now.to_i})
+      if not @options[:fixed]
+        puts "added gw #{uri}"
+        add_gateway(gw_id,{uri: uri, source: m[:type], duration:duration,stamp: Time.now.to_i})
+      else
+        puts "ignored gw #{uri}"
+      end
     end
   end
 

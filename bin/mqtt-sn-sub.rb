@@ -26,6 +26,9 @@ OptionParser.new do |opts|
   opts.on("-s", "--server uri","URI of the MQTT-SN Server to connect to. Example udp://localhost:1883. Default: Use Autodiscovery.") do |v|
     options[:server_uri] = v
   end
+  opts.on("-f", "--[no-]fixed","Keep Broker fixed, do not autodiscover.") do |v|
+    options[:fixed] = v
+  end
   options[:broadcast_uri] = "udp://225.4.5.6:5000"
   opts.on("-b", "--[no-]broadcast uri", "Multicast URI for Autodiscovery: ADVERTISE, SEARCHGW and GWINFO (udp://225.4.5.6:5000)") do |v|
     options[:broadcast_uri] = v
